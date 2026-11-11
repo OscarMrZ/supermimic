@@ -21,14 +21,22 @@ def _env(
   scene: dict | None = None,
   sim_model=None,
   num_envs: int = 4,
+  num_joints: int = 0,
 ):
   return SimpleNamespace(
     cfg=SimpleNamespace(events=events or {}),
     scene=scene or {},
+    command_manager=_command_manager(num_joints),
     sim=SimpleNamespace(model=sim_model) if sim_model is not None else None,
     num_envs=num_envs,
     device="cpu",
   )
+
+
+def _command_manager(num_joints: int) -> SimpleNamespace:
+  """A command manager whose motion holds all ``num_joints`` joints."""
+  motion = SimpleNamespace(joint_ids=torch.arange(num_joints))
+  return SimpleNamespace(get_term=lambda _: motion)
 
 
 def _identity_indexing(num: int) -> SimpleNamespace:
@@ -106,6 +114,7 @@ def _encoder_env(*, num_joints, encoder_bias=None, bias_range=(-0.01, 0.01)):
         else torch.zeros(4, num_joints),
       )
     },
+    num_joints=num_joints,
   )
 
 
@@ -305,6 +314,7 @@ def _full_env(*event_names: str, num_envs: int = 2):
   return SimpleNamespace(
     cfg=SimpleNamespace(events=events),
     scene={"robot": asset},
+    command_manager=_command_manager(3),
     sim=SimpleNamespace(
       model=SimpleNamespace(
         geom_friction=torch.zeros(num_envs, 1, 3),

@@ -112,7 +112,9 @@ def _bound(
   indexing = SimpleNamespace(
     body_ids=torch.arange(g1.model.nbody), joint_q_adr=torch.tensor(g1.q_adr)
   )
-  motion = SimpleNamespace(body_indexes=torch.tensor(g1.body_ids))
+  motion = SimpleNamespace(
+    body_indexes=torch.tensor(g1.body_ids), joint_ids=torch.arange(g1.num_joints)
+  )
   data = SimpleNamespace(soft_joint_pos_limits=g1.soft_limits[None])
   env = SimpleNamespace(
     scene={"robot": SimpleNamespace(indexing=indexing, data=data)},

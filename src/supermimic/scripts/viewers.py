@@ -72,6 +72,7 @@ class SuperMimicViewerMixin:
     self.joint_q_adr = np.array(
       [mj_model.joint(n).qposadr[0] for n in joint_names if mj_model.joint(n).type != 0]
     )
+    self._motion_cmd = self.env.unwrapped.command_manager.get_term("motion")
     # Find free joint
     free_joint_id = next(
       (i for i in range(mj_model.njnt) if mj_model.joint(i).type == 0), -1
@@ -317,9 +318,12 @@ class SuperMimicViewerMixin:
             self.wm_vis_mocap_quat = root_quat.cpu().numpy()
             joint_state_start = 0
           joint_state = state[
-            joint_state_start : joint_state_start + len(self.joint_q_adr)
+            joint_state_start : joint_state_start + len(self._motion_cmd.joint_ids)
           ]
-          qpos[self.joint_q_adr] = joint_state.cpu().numpy()
+          joint_pos, _ = self._motion_cmd.full_joint_state(
+            joint_state, torch.zeros_like(joint_state)
+          )
+          qpos[self.joint_q_adr] = joint_pos.cpu().numpy()
           self.wm_vis_qpos = qpos
 
         self.step_in_rollout += 1
