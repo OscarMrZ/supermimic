@@ -138,7 +138,9 @@ def build_world_model(cfg: BaseRunnerCfg, env, device: str) -> WorldModel:
     f"[INFO] Sim Context: {sim_ctx_dim} dim ({[s.name for s in sim_context.specs]})"
   )
 
-  default_joint_pos = env.unwrapped.scene["robot"].data.default_joint_pos[0].to(device)
+  joint_ids = env.unwrapped.command_manager.get_term("motion").joint_ids
+  robot_data = env.unwrapped.scene["robot"].data
+  default_joint_pos = robot_data.default_joint_pos[0, joint_ids].to(device)
   representation = create_representation(
     cfg.representation,
     num_full_state,
