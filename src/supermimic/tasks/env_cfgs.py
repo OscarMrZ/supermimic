@@ -176,6 +176,15 @@ def kangaroo_gencoord_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # rebuilds the root body's angular velocity, so the actor reads that one.
   gyro = cfg.observations["actor"].terms["base_ang_vel"]
   gyro.func, gyro.params = mdp.base_ang_vel, {}
+  # The state, the sensors and the joint-limit reward read the motion's joints,
+  # which leave out the passive femur and knee joints.
+  joints = SceneEntityCfg("robot", joint_names=cfg.commands["motion"].joint_names)
+  actor = cfg.observations["actor"].terms
+  for term in (actor["joint_pos"], actor["joint_vel"], cfg.rewards["joint_limit"]):
+    term.params["asset_cfg"] = joints
+  state = cfg.observations["full_state"].terms
+  state["joint_pos"].func = _make_body_obs_fn("robot_joint_pos")
+  state["joint_vel"].func = _make_body_obs_fn("robot_joint_vel")
   # Only the self-collision reward reads this sensor, and that reward is dropped.
   # Kangaroo's collision meshes overflow its contact matches when the arms flail.
   cfg.scene.sensors = ()
