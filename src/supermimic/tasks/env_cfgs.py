@@ -10,6 +10,9 @@ from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.managers import ObservationGroupCfg, ObservationTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env_cfg
+from mjlab.tasks.tracking.config.kangaroo.env_cfgs import (
+  pal_kangaroo_grippers_flat_tracking_env_cfg,
+)
 from mjlab.tasks.tracking.mdp.commands import MotionCommand
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 
@@ -161,9 +164,29 @@ def _goal_obs_group() -> ObservationGroupCfg:
 
 def gencoord_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   """Create generalized-coordinate world model environment configuration based on G1 tracking."""
-  cfg = unitree_g1_flat_tracking_env_cfg(play=play)
+  return _gencoord_env_cfg(unitree_g1_flat_tracking_env_cfg(play=play), "pelvis")
 
-  cfg.commands["motion"].anchor_body_name = "pelvis"
+
+def kangaroo_gencoord_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Create generalized-coordinate world model environment configuration based on Kangaroo grippers tracking."""
+  cfg = _gencoord_env_cfg(
+    pal_kangaroo_grippers_flat_tracking_env_cfg(play=play), "base_link"
+  )
+  # Kangaroo's IMU sits on the torso, after the waist joints. The world model
+  # rebuilds the root body's angular velocity, so the actor reads that one.
+  gyro = cfg.observations["actor"].terms["base_ang_vel"]
+  gyro.func, gyro.params = mdp.base_ang_vel, {}
+  # Only the self-collision reward reads this sensor, and that reward is dropped.
+  # Kangaroo's collision meshes overflow its contact matches when the arms flail.
+  cfg.scene.sensors = ()
+  return cfg
+
+
+def _gencoord_env_cfg(
+  cfg: ManagerBasedRlEnvCfg, root_body_name: str
+) -> ManagerBasedRlEnvCfg:
+  """Turn a tracking configuration into the generalized-coordinate world model one."""
+  cfg.commands["motion"].anchor_body_name = root_body_name
 
   cfg.observations["actor"] = _sensor_actor_group()
 
