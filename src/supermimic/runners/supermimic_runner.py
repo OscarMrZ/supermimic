@@ -13,6 +13,7 @@ import tyro
 import wandb
 from rsl_rl.models import MLPModel
 from tensordict import TensorDict
+from torch.utils.tensorboard import SummaryWriter
 
 from supermimic.envs.motion_tracking_env import MotionTrackingEnv
 from supermimic.envs.multi_task_world_model_env import MultiTaskWorldModelEnv
@@ -458,10 +459,12 @@ class BaseRunner[CfgT: BaseRunnerCfg]:
     raise NotImplementedError
 
   def _create_log_dir(self, *extra_parts: str) -> Path:
-    """Create and return a timestamped log directory."""
+    """Create and return a timestamped log directory, which also gets the
+    TensorBoard events."""
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     log_dir = Path("logs", self.task_id, *extra_parts, timestamp)
     log_dir.mkdir(parents=True, exist_ok=True)
+    self.logger.writer = SummaryWriter(str(log_dir))
     print(f"[INFO] Logging to {log_dir}")
     return log_dir
 
@@ -494,6 +497,8 @@ class BaseRunner[CfgT: BaseRunnerCfg]:
     env_close_fn = getattr(self.env, "close", None)
     if env_close_fn:
       env_close_fn()
+    if self.logger.writer is not None:
+      self.logger.writer.close()
     wandb.finish()
 
 
@@ -750,7 +755,9 @@ class SuperMimicRunner(BaseRunner[SuperMimicRunnerCfg]):
             run_name=wandb.run.name,
             term_widths=self._representation.proprio_term_widths(self._num_actions),
           )
-        upload = uploader.submit(log_model_artifact, checkpoint_files)
+        # A disabled run has nowhere to log to, and would still stage a copy.
+        if not wandb.run.disabled:
+          upload = uploader.submit(log_model_artifact, checkpoint_files)
 
     uploader.shutdown()
     self._cleanup()
