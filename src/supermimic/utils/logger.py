@@ -6,11 +6,12 @@ from collections import deque
 
 import torch
 import wandb
+from torch.utils.tensorboard import SummaryWriter
 
 
 class Logger:
   """Episode statistics of the real env, logged as one W&B row and one console
-  block per log call."""
+  block per log call, and as TensorBoard scalars once ``writer`` is set."""
 
   def __init__(
     self,
@@ -24,6 +25,7 @@ class Logger:
     self.max_episode_length = max_episode_length
     self.device = device
 
+    self.writer: SummaryWriter | None = None
     self.tot_timesteps = 0
     self.tot_time = 0.0
 
@@ -178,6 +180,9 @@ class Logger:
       row["Train/mean_episode_length"] = statistics.mean(self.lenbuffer)
     row |= {k if "/" in k else f"Episode/{k}": v for k, v in extras.items()}
     wandb.log(row, step=it)
+    if self.writer is not None:
+      for key, value in row.items():
+        self.writer.add_scalar(key, value, it)
     print(
       self._build_console_log(
         it,
