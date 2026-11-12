@@ -1,7 +1,7 @@
 """Export the motion policy of a SuperMimic run for PAL's pal_policy_controller.
 
   uv run --with onnxruntime python -m supermimic.scripts.export_pal --checkpoint-dir <run> \
-    --motion-file <a packed Kangaroo motion directory> --output <policy dir>/<name>.onnx
+    --motion-file <the training motions, or a sample of them> --output <policy dir>/<name>.onnx
 
 pal_policy_controller builds the observation from the robot and a streamed motion reference, in
 the pal_mjlab layout its metadata describes: the terms in ``observation_names`` order, and the
@@ -10,9 +10,13 @@ columns of the rotation matrix, column after column. The actor reads the same va
 term by term (all the joint frames, then all the orientations) and its rot6d row after row, so the
 exported graph starts by permuting its input into the actor's layout.
 
-The motion file only builds the environment; any clip of the robot will do. The runner settings
-must be the ones the run was trained with: loading the checkpoint fails if they size it otherwise.
-``env.yaml`` and ``agent.yaml`` are written next to the ONNX.
+Without a reference, the controller holds a still goal. The actor only ever saw goals from the
+motions, so that goal must be a stand that they hold: ``goal_hold_joint_pos`` is the most typical
+frame of their still, upright stretches (see stand_pose()), hence the motion file should be the
+training motions or a sample of them.
+
+The runner settings must be the ones the run was trained with: loading the checkpoint fails if
+they size it otherwise. ``env.yaml`` and ``agent.yaml`` are written next to the ONNX.
 """
 
 from __future__ import annotations
@@ -56,13 +60,20 @@ PROPRIO_TERMS = {
   "actions": "actions",
 }
 
+# A stand frame: still joints, root upright and still, for at least STAND_SECONDS in a row.
+STAND_JOINT_SPEED = 0.15  # rad/s, norm over the joints.
+STAND_TILT = np.radians(4.0)
+STAND_ROOT_SPEED = 0.05  # m/s + rad/s.
+STAND_SECONDS = 1.0
+
 
 @dataclass
 class ExportConfig:
   checkpoint_dir: str
   """The run folder, with ``actor.pt`` and ``world_model.pt``."""
   motion_file: str
-  """A packed motion directory of the robot, only to build the environment."""
+  """Motions of the robot: they build the environment and give the stand held without a
+  reference. The training motions, or a sample of them."""
   output: str
   """The ``.onnx`` file to write."""
   task_id: str = "SuperMimic-GenCoord-Kangaroo"
@@ -119,6 +130,50 @@ def per_action(value, action_dim: int) -> list[float]:
   return [float(value)] * action_dim
 
 
+def stand_pose(motion, fps: float) -> tuple[torch.Tensor, str]:
+  """The joint positions of the stand frame closest to the median of all of them, and where it is.
+
+  Stand frames are those of the stretches of at least STAND_SECONDS, within one clip, with still
+  joints and an upright, still root. A real frame rather than the median itself, so that the pose
+  is one the motions hold as a whole.
+  """
+  q = motion.root_quat_w  # (w, x, y, z)
+  tilt = torch.acos((1 - 2 * (q[:, 1] ** 2 + q[:, 2] ** 2)).clamp(-1.0, 1.0))
+  root_speed = motion.root_lin_vel_w.norm(dim=-1) + motion.root_ang_vel_w.norm(dim=-1)
+  still = (
+    (motion.joint_vel.norm(dim=-1) < STAND_JOINT_SPEED)
+    & (tilt < STAND_TILT)
+    & (root_speed < STAND_ROOT_SPEED)
+  ).tolist()
+
+  min_frames = int(round(STAND_SECONDS * fps))
+  ends = motion.motion_ends.tolist()
+  frames = []
+  for start, end in zip([0, *ends[:-1]], ends, strict=True):
+    run = start
+    for frame in range(start, end + 1):
+      if frame == end or not still[frame]:
+        if frame - run >= min_frames:
+          frames += range(run, frame)
+        run = frame + 1
+  if not frames:
+    raise ValueError(
+      f"The motions have no still, upright stretch of {STAND_SECONDS} s to stand in"
+    )
+
+  frames = torch.tensor(frames, device=motion.joint_pos.device)
+  poses = motion.joint_pos[frames]
+  best = (poses - poses.median(dim=0).values).norm(dim=-1).argmin()
+  frame = int(frames[best])
+  clip = int(np.searchsorted(ends, frame, side="right"))
+  clip_start = 0 if clip == 0 else ends[clip - 1]
+  source = (
+    f"{motion.motion_names[clip]} frame {frame - clip_start} "
+    f"(of {len(frames)} stand frames in {len(still)})"
+  )
+  return poses[best].cpu(), source
+
+
 def pal_metadata(env: ManagerBasedRlEnv, actor, checkpoint: str) -> dict[str, str]:
   """The metadata pal_policy_controller parses (pal_mjlab's export format)."""
   robot = env.scene["robot"]
@@ -144,6 +199,7 @@ def pal_metadata(env: ManagerBasedRlEnv, actor, checkpoint: str) -> dict[str, st
     raise ValueError(f"Actor terms {names}, expected {list(PROPRIO_TERMS)}")
   widths = [3, 3, len(observed_joints), len(observed_joints), len(action_joints)]
   goal_size = NUM_GOAL_FRAMES * (2 * len(goal_joints) + ROT6D)
+  hold, hold_source = stand_pose(motion.motion, 1.0 / env.step_dt)
 
   return {
     "checkpoint": checkpoint,
@@ -163,6 +219,8 @@ def pal_metadata(env: ManagerBasedRlEnv, actor, checkpoint: str) -> dict[str, st
     "goal_num_future_frames": str(NUM_GOAL_FRAMES),
     "goal_frame_stride": str(GOAL_FRAME_STRIDE),
     "goal_root_body": motion.cfg.anchor_body_name,
+    "goal_hold_joint_pos": csv(hold.tolist()),
+    "goal_hold_source": hold_source,
   }
 
 
