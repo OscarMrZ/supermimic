@@ -100,7 +100,9 @@ class PalMotionOnnx(nn.Module):
     self.actor = _SingleEncoderOnnx(actor, "motion", term_widths)
     index = controller_index(self.actor.hist_size, num_joints)
     if len(index) != self.actor.input_size:
-      raise ValueError(f"Goal layout of {len(index)} values, the actor reads {self.actor.input_size}")
+      raise ValueError(
+        f"Goal layout of {len(index)} values, the actor reads {self.actor.input_size}"
+      )
     self.register_buffer("_index", index)
 
   def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -120,12 +122,16 @@ def per_action(value, action_dim: int) -> list[float]:
 def pal_metadata(env: ManagerBasedRlEnv, actor, checkpoint: str) -> dict[str, str]:
   """The metadata pal_policy_controller parses (pal_mjlab's export format)."""
   robot = env.scene["robot"]
-  observed = env.observation_manager.get_term_cfg("actor", "joint_pos").params["asset_cfg"]
+  observed = env.observation_manager.get_term_cfg("actor", "joint_pos").params[
+    "asset_cfg"
+  ]
   observed_joints = [robot.joint_names[i] for i in observed.joint_ids]
   motion = env.command_manager.get_term("motion")
   goal_joints = [robot.joint_names[i] for i in motion.joint_ids.tolist()]
   if goal_joints != observed_joints:
-    raise ValueError(f"Goal joints {goal_joints} are not the observed ones {observed_joints}")
+    raise ValueError(
+      f"Goal joints {goal_joints} are not the observed ones {observed_joints}"
+    )
 
   action = env.action_manager.get_term("joint_pos")
   action_joints = list(action._target_names)
@@ -160,7 +166,9 @@ def pal_metadata(env: ManagerBasedRlEnv, actor, checkpoint: str) -> dict[str, st
   }
 
 
-def check_against_actor(onnx_path: str, wrapper: PalMotionOnnx, num_joints: int) -> float:
+def check_against_actor(
+  onnx_path: str, wrapper: PalMotionOnnx, num_joints: int
+) -> float:
   """Feed the same observation to the ONNX, in the controller layout, and to the actor, in its
   own layout built as in training; return the largest difference of their actions."""
   torch.manual_seed(0)
@@ -205,7 +213,11 @@ def main(cfg: ExportConfig) -> None:
   output = Path(os.path.expanduser(cfg.output))
   output.parent.mkdir(parents=True, exist_ok=True)
   _export_onnx(
-    wrapper, (torch.zeros(1, wrapper.actor.input_size),), ["obs"], ["actions"], str(output)
+    wrapper,
+    (torch.zeros(1, wrapper.actor.input_size),),
+    ["obs"],
+    ["actions"],
+    str(output),
   )
   metadata = pal_metadata(env.unwrapped, actor, str(checkpoint.resolve()))
   model = onnx.load(str(output))
