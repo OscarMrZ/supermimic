@@ -15,8 +15,9 @@ motions, so that goal must be a stand that they hold: ``goal_hold_joint_pos`` is
 frame of their still, upright stretches (see stand_pose()), hence the motion file should be the
 training motions or a sample of them.
 
-The runner settings must be the ones the run was trained with: loading the checkpoint fails if
-they size it otherwise. ``env.yaml`` and ``agent.yaml`` are written next to the ONNX.
+The runner settings must be the ones the run was trained with (e.g. ``--runner.history-length``),
+and so must SUPERMIMIC_GOAL_FRAMES: loading the checkpoint fails if they size it otherwise.
+``env.yaml`` and ``agent.yaml`` are written next to the ONNX.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from supermimic.runners.supermimic_runner import (
   build_actor,
   build_world_model,
 )
+from supermimic.tasks.task_spec import build_actor_obs_td
 
 ROT6D = 6
 
@@ -88,6 +90,7 @@ def controller_index(proprio_dim: int, num_joints: int) -> torch.Tensor:
 
   Actor: ``[proprio, frames × (pos, vel), frames × rot6d row-major]``.
   Controller: ``[proprio, frames × (pos, vel, rot6d column-major)]``.
+  Both lay the proprio history out term by term, each term from its oldest frame to its newest.
   """
   joints_size = 2 * num_joints
   frame_size = joints_size + ROT6D
@@ -106,8 +109,6 @@ class PalMotionOnnx(nn.Module):
 
   def __init__(self, actor, term_widths: list[int], num_joints: int) -> None:
     super().__init__()
-    if actor.history_length != 1:
-      raise ValueError("pal_policy_controller exports only support history_length 1")
     self.actor = _SingleEncoderOnnx(actor, "motion", term_widths)
     index = controller_index(self.actor.hist_size, num_joints)
     if len(index) != self.actor.input_size:
@@ -225,25 +226,39 @@ def pal_metadata(env: ManagerBasedRlEnv, actor, checkpoint: str) -> dict[str, st
 
 
 def check_against_actor(
-  onnx_path: str, wrapper: PalMotionOnnx, num_joints: int
+  onnx_path: str, actor, term_widths: list[int], num_joints: int
 ) -> float:
-  """Feed the same observation to the ONNX, in the controller layout, and to the actor, in its
-  own layout built as in training; return the largest difference of their actions."""
+  """Feed the same observation to the ONNX, in the controller layout, and to the actor's own
+  forward, as training builds it; return the largest difference of their actions."""
   torch.manual_seed(0)
-  batch, proprio_dim = 1, wrapper.actor.hist_size
-  proprio = torch.randn(batch, proprio_dim)
+  batch = 1
+  history = torch.randn(
+    batch, actor.history_length, sum(term_widths)
+  )  # Oldest frame first.
   joints = torch.randn(batch, NUM_GOAL_FRAMES, 2 * num_joints)
   quat = torch.nn.functional.normalize(torch.randn(batch, NUM_GOAL_FRAMES, 4), dim=-1)
   rot = matrix_from_quat(quat)  # (B, N, 3, 3)
-  actor_in = torch.cat(
-    [proprio, joints.flatten(1), rot[..., :2].flatten(-2).flatten(1)], dim=-1
+  goal = torch.cat([joints.flatten(1), rot[..., :2].flatten(-2).flatten(1)], dim=-1)
+
+  # Term by term, each term's frames from oldest to newest.
+  controller_history = torch.cat(
+    [term.flatten(1) for term in history.split(term_widths, dim=-1)], dim=-1
   )
   controller_rot6d = rot[..., :2].transpose(-1, -2).flatten(-2)  # Column after column.
   controller_in = torch.cat(
-    [proprio, torch.cat([joints, controller_rot6d], dim=-1).flatten(1)], dim=-1
+    [controller_history, torch.cat([joints, controller_rot6d], dim=-1).flatten(1)],
+    dim=-1,
   )
+
+  actor = actor.cpu()
+  actor.set_slot_mix({"motion": 1.0})
+  goals = {
+    name: torch.zeros(batch, spec.goal_dim)
+    for name, spec in zip(actor._task_names, actor.task_specs, strict=True)
+  }
+  goals["motion"] = goal
   with torch.no_grad():
-    expected = wrapper.actor.cpu()(actor_in).numpy()
+    expected = actor(build_actor_obs_td(goals, history)).numpy()
   session = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
   actual = session.run(None, {"obs": controller_in.numpy()})[0]
   return float(np.abs(actual - expected).max())
@@ -283,7 +298,7 @@ def main(cfg: ExportConfig) -> None:
     model.metadata_props.append(onnx.StringStringEntryProto(key=key, value=value))
   onnx.save(model, str(output))
 
-  error = check_against_actor(str(output), wrapper, num_joints)
+  error = check_against_actor(str(output), actor, term_widths, num_joints)
   print(f"[INFO] ONNX vs actor, largest action difference: {error:.2e}")
   if error > 1e-4:
     raise RuntimeError("The exported ONNX does not reproduce the actor")
