@@ -8,6 +8,7 @@ Two representations are provided:
 from __future__ import annotations
 
 import math
+import os
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Literal
 
@@ -96,7 +97,9 @@ def create_representation(
 # NUM_GOAL_FRAMES frames spaced GOAL_FRAME_STRIDE motion steps apart. Motion runs
 # at the control rate (one frame per env step, ~50 Hz / 0.02 s), so stride 5
 # ≈ 0.1 s spacing and a ~0.9 s lookahead with 10 frames.
-NUM_GOAL_FRAMES = 10
+# SUPERMIMIC_GOAL_FRAMES overrides the count: 2 leaves a 0.1 s lookahead, for a
+# reference that is only known live.
+NUM_GOAL_FRAMES = int(os.environ.get("SUPERMIMIC_GOAL_FRAMES", "10"))
 GOAL_FRAME_STRIDE = 5
 
 # wm_goal  = [content, rel_pos_b(3*N), rel_ori_b(6*N)]
