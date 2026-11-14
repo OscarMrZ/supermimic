@@ -1,6 +1,9 @@
 """Register SuperMimic tasks."""
 
 from mjlab.tasks.registry import load_rl_cfg, register_mjlab_task
+from mjlab.tasks.tracking.config.kangaroo.env_cfgs import (
+  pal_kangaroo_grippers_flat_tracking_env_cfg,
+)
 
 from .env_cfgs import gencoord_env_cfg, kangaroo_gencoord_env_cfg, maxcoord_env_cfg
 
@@ -34,6 +37,21 @@ try:
     task_id="SuperMimic-GenCoord-Kangaroo",
     env_cfg=kangaroo_gencoord_env_cfg(),
     play_env_cfg=kangaroo_gencoord_env_cfg(play=True),
+    rl_cfg=load_rl_cfg(BASE_TASK_ID),
+  )
+except ValueError:
+  # Already registered
+  pass
+
+try:
+  register_mjlab_task(
+    task_id="SuperMimic-GenCoord-Kangaroo-Grippers",
+    env_cfg=kangaroo_gencoord_env_cfg(
+      tracking_env_cfg=pal_kangaroo_grippers_flat_tracking_env_cfg
+    ),
+    play_env_cfg=kangaroo_gencoord_env_cfg(
+      play=True, tracking_env_cfg=pal_kangaroo_grippers_flat_tracking_env_cfg
+    ),
     rl_cfg=load_rl_cfg(BASE_TASK_ID),
   )
 except ValueError:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import cast
 
 import mjlab.envs.mdp as mdp
@@ -11,7 +12,7 @@ from mjlab.managers import ObservationGroupCfg, ObservationTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env_cfg
 from mjlab.tasks.tracking.config.kangaroo.env_cfgs import (
-  pal_kangaroo_grippers_flat_tracking_env_cfg,
+  pal_kangaroo_flat_tracking_env_cfg,
 )
 from mjlab.tasks.tracking.mdp.commands import MotionCommand
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
@@ -167,11 +168,14 @@ def gencoord_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   return _gencoord_env_cfg(unitree_g1_flat_tracking_env_cfg(play=play), "pelvis")
 
 
-def kangaroo_gencoord_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  """Create generalized-coordinate world model environment configuration based on Kangaroo grippers tracking."""
-  cfg = _gencoord_env_cfg(
-    pal_kangaroo_grippers_flat_tracking_env_cfg(play=play), "base_link"
-  )
+def kangaroo_gencoord_env_cfg(
+  play: bool = False,
+  tracking_env_cfg: Callable[..., ManagerBasedRlEnvCfg] = (
+    pal_kangaroo_flat_tracking_env_cfg
+  ),
+) -> ManagerBasedRlEnvCfg:
+  """Create generalized-coordinate world model environment configuration based on Kangaroo tracking (4-DoF arms by default)."""
+  cfg = _gencoord_env_cfg(tracking_env_cfg(play=play), "base_link")
   # Kangaroo's IMU sits on the torso, after the waist joints. The world model
   # rebuilds the root body's angular velocity, so the actor reads that one.
   gyro = cfg.observations["actor"].terms["base_ang_vel"]
