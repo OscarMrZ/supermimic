@@ -8,7 +8,6 @@ Two representations are provided:
 from __future__ import annotations
 
 import math
-import os
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Literal
 
@@ -97,9 +96,9 @@ def create_representation(
 # NUM_GOAL_FRAMES frames spaced GOAL_FRAME_STRIDE motion steps apart. Motion runs
 # at the control rate (one frame per env step, ~50 Hz / 0.02 s), so stride 5
 # ≈ 0.1 s spacing and a ~0.9 s lookahead with 10 frames.
-# SUPERMIMIC_GOAL_FRAMES overrides the count: 2 leaves a 0.1 s lookahead, for a
-# reference that is only known live.
-NUM_GOAL_FRAMES = int(os.environ.get("SUPERMIMIC_GOAL_FRAMES", "10"))
+# set_goal_window() changes both: 6 frames at stride 1 are every motion frame of
+# the next 0.1 s, for a reference that is only known live.
+NUM_GOAL_FRAMES = 10
 GOAL_FRAME_STRIDE = 5
 
 # wm_goal  = [content, rel_pos_b(3*N), rel_ori_b(6*N)]
@@ -107,6 +106,18 @@ GOAL_FRAME_STRIDE = 5
 # content = NUM_GOAL_FRAMES joint targets: per frame [joint_pos, joint_vel].
 GOAL_REL_POS_DIM = 3 * NUM_GOAL_FRAMES  # rel_pos_b: in wm_goal only
 GOAL_REL_ORI_DIM = 6 * NUM_GOAL_FRAMES  # rel_ori_b: in both wm_goal and actor_goal
+
+
+def set_goal_window(num_frames: int, stride: int) -> None:
+  """Set the goal window to ``num_frames`` frames, ``stride`` motion frames apart.
+
+  It sizes the goal, so it must be set before the environment is built, and the
+  same way to train and to play or export a checkpoint.
+  """
+  global NUM_GOAL_FRAMES, GOAL_FRAME_STRIDE, GOAL_REL_POS_DIM, GOAL_REL_ORI_DIM
+  NUM_GOAL_FRAMES, GOAL_FRAME_STRIDE = num_frames, stride
+  GOAL_REL_POS_DIM = 3 * num_frames
+  GOAL_REL_ORI_DIM = 6 * num_frames
 
 
 def actor_goal_dim(num_goals: int) -> int:

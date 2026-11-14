@@ -11,6 +11,7 @@ from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.tasks.registry import list_tasks, load_env_cfg
 
 import supermimic.tasks  # noqa: F401
+from supermimic.representations import set_goal_window
 from supermimic.runners.supermimic_runner import SuperMimicRunner, SuperMimicRunnerCfg
 from supermimic.scripts.train_utils import (
   create_env,
@@ -82,6 +83,7 @@ def main() -> None:
     "external" if args.runner.sampling_mode == "return" else args.runner.sampling_mode
   )
 
+  set_goal_window(args.runner.goal_frames, args.runner.goal_stride)
   env = create_env(args.env, args.num_envs, device)
 
   # Init Runner

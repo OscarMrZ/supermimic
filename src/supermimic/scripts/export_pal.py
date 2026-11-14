@@ -16,7 +16,8 @@ frame of their still, upright stretches (see stand_pose()), hence the motion fil
 training motions or a sample of them.
 
 The runner settings must be the ones the run was trained with (e.g. ``--runner.history-length``),
-and so must SUPERMIMIC_GOAL_FRAMES: loading the checkpoint fails if they size it otherwise.
+and so must ``--runner.goal-frames`` and ``--runner.goal-stride``: loading the checkpoint fails if
+they size it otherwise.
 ``env.yaml`` and ``agent.yaml`` are written next to the ONNX.
 """
 
@@ -40,7 +41,7 @@ from mjlab.utils.lab_api.math import matrix_from_quat
 from mjlab.utils.os import dump_yaml
 
 import supermimic.tasks  # noqa: F401
-from supermimic.representations import GOAL_FRAME_STRIDE, NUM_GOAL_FRAMES
+from supermimic import representations
 from supermimic.runners.exporter import _export_onnx, _SingleEncoderOnnx
 from supermimic.runners.run_config import check_representation_matches
 from supermimic.runners.supermimic_runner import (
@@ -95,10 +96,10 @@ def controller_index(proprio_dim: int, num_joints: int) -> torch.Tensor:
   joints_size = 2 * num_joints
   frame_size = joints_size + ROT6D
   index = list(range(proprio_dim))
-  for k in range(NUM_GOAL_FRAMES):
+  for k in range(representations.NUM_GOAL_FRAMES):
     frame = proprio_dim + k * frame_size
     index += range(frame, frame + joints_size)
-  for k in range(NUM_GOAL_FRAMES):
+  for k in range(representations.NUM_GOAL_FRAMES):
     rot6d = proprio_dim + k * frame_size + joints_size
     index += [rot6d + col * 3 + row for row in range(3) for col in range(2)]
   return torch.tensor(index, dtype=torch.long)
@@ -199,7 +200,7 @@ def pal_metadata(env: ManagerBasedRlEnv, actor, checkpoint: str) -> dict[str, st
   if names != list(PROPRIO_TERMS):
     raise ValueError(f"Actor terms {names}, expected {list(PROPRIO_TERMS)}")
   widths = [3, 3, len(observed_joints), len(observed_joints), len(action_joints)]
-  goal_size = NUM_GOAL_FRAMES * (2 * len(goal_joints) + ROT6D)
+  goal_size = representations.NUM_GOAL_FRAMES * (2 * len(goal_joints) + ROT6D)
   hold, hold_source = stand_pose(motion.motion, 1.0 / env.step_dt)
 
   return {
@@ -217,8 +218,8 @@ def pal_metadata(env: ManagerBasedRlEnv, actor, checkpoint: str) -> dict[str, st
     "observation_terms_dim": csv(widths + [goal_size]),
     "observation_terms_history_length": csv([actor.history_length] * len(widths) + [1]),
     "goal_joint_names": ",".join(goal_joints),
-    "goal_num_future_frames": str(NUM_GOAL_FRAMES),
-    "goal_frame_stride": str(GOAL_FRAME_STRIDE),
+    "goal_num_future_frames": str(representations.NUM_GOAL_FRAMES),
+    "goal_frame_stride": str(representations.GOAL_FRAME_STRIDE),
     "goal_root_body": motion.cfg.anchor_body_name,
     "goal_hold_joint_pos": csv(hold.tolist()),
     "goal_hold_source": hold_source,
@@ -235,8 +236,10 @@ def check_against_actor(
   history = torch.randn(
     batch, actor.history_length, sum(term_widths)
   )  # Oldest frame first.
-  joints = torch.randn(batch, NUM_GOAL_FRAMES, 2 * num_joints)
-  quat = torch.nn.functional.normalize(torch.randn(batch, NUM_GOAL_FRAMES, 4), dim=-1)
+  joints = torch.randn(batch, representations.NUM_GOAL_FRAMES, 2 * num_joints)
+  quat = torch.nn.functional.normalize(
+    torch.randn(batch, representations.NUM_GOAL_FRAMES, 4), dim=-1
+  )
   rot = matrix_from_quat(quat)  # (B, N, 3, 3)
   goal = torch.cat([joints.flatten(1), rot[..., :2].flatten(-2).flatten(1)], dim=-1)
 
@@ -267,6 +270,7 @@ def check_against_actor(
 def main(cfg: ExportConfig) -> None:
   device = cfg.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
   check_representation_matches(cfg.task_id, cfg.runner.representation)
+  representations.set_goal_window(cfg.runner.goal_frames, cfg.runner.goal_stride)
   env_cfg = load_env_cfg(cfg.task_id, play=True)
   env_cfg.scene.num_envs = 1
   env_cfg.commands["motion"].motion_file = os.path.expanduser(cfg.motion_file)
