@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import torch
 
+from supermimic.representations import GOAL_REL_POS_DIM
 from supermimic.tasks.task_spec import (
   TasksCfg,
   make_velocity_task,
@@ -161,7 +162,7 @@ class TestResolveTaskSpecs:
     specs = resolve_task_specs(TasksCfg(), rep, num_goals=87)
     names = [s.name for s in specs]
     assert names == ["motion", "velocity"]
-    # motion goal_dim = num_goals - rel_pos_dim (3 * NUM_GOAL_FRAMES = 30) = 57
-    assert specs[0].goal_dim == 57
+    # motion goal_dim = num_goals - rel_pos_dim (3 per goal frame)
+    assert specs[0].goal_dim == 87 - GOAL_REL_POS_DIM
     assert specs[1].goal_dim == 3
     assert specs[1].raw_goal_dim == 3

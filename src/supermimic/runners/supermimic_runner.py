@@ -78,6 +78,11 @@ class SuperMimicRunnerCfg(BaseRunnerCfg):
   latent_bc_weight: float = 1e-1
   """Weight on the latent BC loss pulling non-anchor encoders toward the
   anchor encoder's latent on the same state. 0 disables."""
+  goal_frames: int = 10
+  """Reference frames in the goal window, ``goal_stride`` motion frames apart."""
+  goal_stride: int = 5
+  """Motion frames between goal frames. At 50 Hz, 10 frames at stride 5 look 0.9 s
+  ahead, 6 frames at stride 1 look 0.1 s ahead."""
   tasks: TasksCfg = field(default_factory=TasksCfg)
   """Per-task hyperparameters."""
   slot_mix: dict[str, float] = field(
