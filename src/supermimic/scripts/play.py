@@ -19,6 +19,7 @@ from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.utils.torch import configure_torch_backends
 
 import supermimic.tasks  # noqa: F401
+from supermimic.representations import set_goal_window
 from supermimic.runners.run_config import check_representation_matches, load_runner_cfg
 from supermimic.runners.supermimic_runner import (
   SuperMimicRunnerCfg,
@@ -76,6 +77,7 @@ def play(task_id: str, cfg: PlayConfig) -> None:
     model_dir = download_model_dir(run)
     motion_artifacts = [a for a in run.used_artifacts() if a.type == "motions"]
   check_representation_matches(task_id, runner_cfg.representation)
+  set_goal_window(runner_cfg.goal_frames, runner_cfg.goal_stride)
 
   command_term = env_cfg.commands["motion"]
   assert isinstance(command_term, MotionCommandCfg)
