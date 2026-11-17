@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal
 
 import torch
+import torch.nn as nn
 import tyro
 import wandb
 from mjlab.envs import ManagerBasedRlEnv
@@ -85,6 +86,11 @@ class SuperMimicRunnerCfg:
   )
   """Fractional slot allocation per task. Must sum to 1.0. The actor has the
   upper-body encoder only when ``upper_body`` has a share."""
+  distill_from: str | None = None
+  """A trained run's folder (``world_model.pt``, ``actor.pt``, ``critic.pt``) to
+  distil from. The run starts from it and trains only the goal encoders it does
+  not hold, on the motion-tracking reward: the rest of its actor and its world
+  model stay as they are, and the critic keeps being fit."""
   policy: BpttCfg | ActorCriticCfg = field(default_factory=ActorCriticCfg)
 
   sampling_mode: Literal["uniform", "adaptive", "start", "return"] = "return"
@@ -471,6 +477,7 @@ class SuperMimicRunner:
     ).to(self.device)
 
     policy_cfg = self.cfg.policy
+    trainable = self._load_teacher(actor, critic) if self.cfg.distill_from else None
 
     self.wm_env = WorldModelEnv(
       dynamics=self._dynamics,
@@ -491,12 +498,43 @@ class SuperMimicRunner:
 
     if isinstance(policy_cfg, ActorCriticPolicyLearnerCfg):
       self.policy_learner = ActorCriticPolicyLearner(
-        actor, critic, self.wm_env, policy_cfg, device=self.device
+        actor, critic, self.wm_env, policy_cfg, self.device, trainable
       )
     else:
       self.policy_learner = BpttPolicyLearner(
-        actor, self.wm_env, policy_cfg, device=self.device
+        actor, self.wm_env, policy_cfg, self.device, trainable
       )
+
+  def _load_teacher(self, actor: MultiEncoderAE, critic: nn.Module) -> list[nn.Module]:
+    """Load the run to distil from and return the goal encoders it does not hold."""
+    assert self.cfg.distill_from is not None
+    model_dir = Path(self.cfg.distill_from).expanduser()
+    print(f"[INFO] Distilling from {model_dir}")
+
+    def load(name: str) -> dict:
+      return torch.load(model_dir / name, map_location=self.device)
+
+    self._wm.load_bundle(load("world_model.pt"))
+    if isinstance(self.cfg.policy, ActorCriticPolicyLearnerCfg):
+      critic.load_state_dict(load("critic.pt"))
+    missing, unexpected = actor.load_state_dict(load("actor.pt"), strict=False)
+    new = {key.split(".")[1] for key in missing}
+    theirs = all(key.startswith(("encoders.", "goal_normalizers.")) for key in missing)
+    if unexpected or not new or not theirs:
+      raise RuntimeError(
+        f"{model_dir / 'actor.pt'} must hold this actor except the goal encoders "
+        f"to train; missing {missing}, unexpected {unexpected}"
+      )
+    # What the run holds keeps the statistics it was trained with.
+    kept = [name for name in actor.goal_normalizers if name not in new]
+    for normalizer in (
+      *self._dynamics.normalizers(),
+      actor.obs_normalizer,
+      *(actor.goal_normalizers[name] for name in kept),
+    ):
+      normalizer.until = 0
+    print(f"[INFO] Training only the goal encoders {sorted(new)}")
+    return [actor.encoders[name] for name in sorted(new)]
 
   def _build_sim_obs_td(
     self,
@@ -638,7 +676,8 @@ class SuperMimicRunner:
         )
 
         start_wm_time = time.time()
-        wm_logs = self.world_model_learner.update(data)
+        # A run that distils keeps the world model it loaded.
+        wm_logs = {} if self.cfg.distill_from else self.world_model_learner.update(data)
         wm_learn_time += time.time() - start_wm_time
 
         start_policy_time = time.time()
