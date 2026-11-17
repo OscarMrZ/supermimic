@@ -185,21 +185,25 @@ def _assemble_goal(
 
 
 def goal_window_indices(
-  motion: MotionLoader, motion_times: torch.Tensor
+  motion: MotionLoader,
+  motion_times: torch.Tensor,
+  num_frames: int | None = None,
+  stride: int | None = None,
 ) -> torch.Tensor:
   """Clamped windowed frame indices ``[t, t+stride, ..., t+(N-1)*stride]``, ``(E, N)``.
 
   Future offsets are clamped to the last frame of each env's current clip so the
   window never bleeds into the next concatenated clip — matching how the env
-  advances ``motion_times``.
+  advances ``motion_times``. ``num_frames`` and ``stride`` default to the goal
+  window set by :func:`set_goal_window`.
   """
+  num_frames = NUM_GOAL_FRAMES if num_frames is None else num_frames
+  stride = GOAL_FRAME_STRIDE if stride is None else stride
   clip = torch.searchsorted(motion.motion_ends, motion_times, right=True)
   # Past-the-end guard: searchsorted returns numel() at the final frame.
   clip = clip.clamp(max=motion.motion_ends.numel() - 1)
   last_valid = motion.motion_ends[clip] - 1
-  offsets = (
-    torch.arange(NUM_GOAL_FRAMES, device=motion_times.device) * GOAL_FRAME_STRIDE
-  )
+  offsets = torch.arange(num_frames, device=motion_times.device) * stride
   return torch.minimum(motion_times[:, None] + offsets, last_valid[:, None])
 
 

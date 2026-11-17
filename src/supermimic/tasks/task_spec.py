@@ -13,14 +13,17 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import mujoco
 import torch
-from mjlab.utils.lab_api.math import quat_apply_inverse
+from mjlab.utils.forward_kinematics import ForwardKinematics
+from mjlab.utils.lab_api.math import quat_apply, quat_apply_inverse
 from tensordict import TensorDict
 
-from supermimic.representations import actor_goal_dim
+from supermimic.representations import actor_goal_dim, goal_window_indices
 
 if TYPE_CHECKING:
-  from mjlab.tasks.tracking.mdp.commands import MotionLoader
+  from mjlab.envs import ManagerBasedRlEnv
+  from mjlab.tasks.tracking.mdp.commands import MotionCommand, MotionLoader
 
   from supermimic.representations import StateRepresentation
 
@@ -178,6 +181,108 @@ def make_velocity_task(
   )
 
 
+def reference_com_feet_distance(
+  motion_cmd: "MotionCommand",
+  mj_model: mujoco.MjModel,
+  feet_body_names: tuple[str, ...],
+  chunk: int = 65536,
+) -> torch.Tensor:
+  """Horizontal distance between the reference's centre of mass and the midpoint
+  of its feet, for every motion frame, ``(num_frames,)``.
+
+  The centre of mass is that of the whole robot on the nominal model, from the
+  forward kinematics of every body. pal_mjlab's WBC calls this "CoM vs CoP": it is
+  zero when the reference stands balanced over its feet.
+  """
+  robot, motion = motion_cmd.robot, motion_cmd.motion
+  body_ids = robot.indexing.body_ids
+  device = motion.joint_pos.device
+  fk = ForwardKinematics(
+    mj_model,
+    body_ids,
+    robot.indexing.joint_q_adr,
+    torch.arange(len(body_ids)),
+    device=str(device),
+  )
+  ids = body_ids.cpu().numpy()
+  mass = torch.as_tensor(mj_model.body_mass[ids], dtype=torch.float32, device=device)
+  ipos = torch.as_tensor(mj_model.body_ipos[ids], dtype=torch.float32, device=device)
+  feet = [robot.body_names.index(name) for name in feet_body_names]
+  distance = []
+  for frames in torch.arange(motion.time_step_total, device=device).split(chunk):
+    # The robot's joints the motion leaves out follow from the ones it holds.
+    joint_pos, joint_vel = motion_cmd.full_joint_state(
+      motion.joint_pos[frames], motion.joint_vel[frames]
+    )
+    pos, quat, _, _ = fk(
+      motion.root_pos_w[frames],
+      motion.root_quat_w[frames],
+      joint_pos,
+      motion.root_lin_vel_w[frames],
+      motion.root_ang_vel_w[frames],
+      joint_vel,
+    )
+    com = pos + quat_apply(quat, ipos.expand_as(pos))
+    com = (com * mass[:, None]).sum(dim=-2) / mass.sum()
+    distance.append((com[:, :2] - pos[:, feet, :2].mean(dim=-2)).norm(dim=-1))
+  return torch.cat(distance)
+
+
+def make_upper_body_task(cfg: "UpperBodyTaskCfg", env: "ManagerBasedRlEnv") -> TaskSpec:
+  """Upper-body task: the command of pal_mjlab's WBC, read from the reference.
+
+  Per frame ``[base height(1), base lin vel(3), base ang vel(3), gravity(3),
+  upper joint pos(U), upper joint vel(U), CoM to feet distance(1)]``. Velocities
+  and gravity are in the reference's own base frame, so the command follows from
+  the motion alone and holds neither a heading nor a leg joint. The legs are left
+  to the policy, which still earns the tracking reward of the whole body.
+  """
+  motion_cmd = env.command_manager.get_term("motion")
+  joint_names = motion_cmd.motion.fk.joint_names
+  device = motion_cmd.motion.joint_pos.device
+  upper = torch.tensor(
+    [i for i, name in enumerate(joint_names) if cfg.leg_joint_token not in name],
+    device=device,
+  )
+  com_feet = reference_com_feet_distance(
+    motion_cmd, env.sim.mj_model, cfg.feet_body_names
+  )
+  gravity = torch.tensor([0.0, 0.0, -1.0], device=device)
+
+  def command(motion, motion_times):
+    idx = goal_window_indices(motion, motion_times, cfg.goal_frames, cfg.goal_stride)
+    quat = motion.root_quat_w[idx]
+    frames = torch.cat(
+      [
+        motion.root_pos_w[idx][..., 2:3],
+        quat_apply_inverse(quat, motion.root_lin_vel_w[idx]),
+        quat_apply_inverse(quat, motion.root_ang_vel_w[idx]),
+        quat_apply_inverse(quat, gravity.expand(*idx.shape, 3)),
+        motion.joint_pos[idx][..., upper],
+        motion.joint_vel[idx][..., upper],
+        com_feet[idx].unsqueeze(-1),
+      ],
+      dim=-1,
+    )
+    return frames.flatten(start_dim=1)
+
+  def precompute_replay_goal(motion):
+    times = torch.arange(motion.time_step_total, device=motion.joint_pos.device)
+    return command(motion, times)
+
+  goal_dim = cfg.goal_frames * (11 + 2 * len(upper))
+  return TaskSpec(
+    name="upper_body",
+    goal_dim=goal_dim,
+    extract_training_goal=lambda motion, motion_times, aux_state: command(
+      motion, motion_times
+    ),
+    build_inference_goal_obs=lambda raw: raw,
+    raw_goal_dim=goal_dim,
+    precompute_replay_goal=precompute_replay_goal,
+  )
+
+
 @dataclass(frozen=True)
 class VelocityTaskCfg:
   """Body-frame velocity-command task."""
@@ -193,10 +298,26 @@ class VelocityTaskCfg:
 
 
 @dataclass(frozen=True)
+class UpperBodyTaskCfg:
+  """Upper-body task: the reference's base and upper body, without its legs."""
+
+  goal_frames: int = 1
+  """Reference frames in the command, ``goal_stride`` motion frames apart. One
+  frame, the current one, is the command of pal_mjlab's WBC."""
+  goal_stride: int = 1
+  """Motion frames between the command's frames."""
+  feet_body_names: tuple[str, ...] = ("leg_left_5_link", "leg_right_5_link")
+  """Bodies whose midpoint the reference's centre of mass is measured from."""
+  leg_joint_token: str = "leg"
+  """Joints with this in their name are left out of the command."""
+
+
+@dataclass(frozen=True)
 class TasksCfg:
   """Per-task hyperparameters. Field order defines slot block ordering."""
 
   velocity: VelocityTaskCfg = field(default_factory=VelocityTaskCfg)
+  upper_body: UpperBodyTaskCfg = field(default_factory=UpperBodyTaskCfg)
 
 
 def resolve_task_specs(
