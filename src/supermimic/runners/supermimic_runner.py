@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Annotated, Literal
 import torch
 import tyro
 import wandb
+from mjlab.envs import ManagerBasedRlEnv
 from tensordict import TensorDict
 from torch.utils.tensorboard import SummaryWriter
 
@@ -30,6 +31,7 @@ from supermimic.sim_context import SimContext
 from supermimic.tasks.task_spec import (
   TasksCfg,
   build_actor_obs_td,
+  make_upper_body_task,
   resolve_task_specs,
 )
 from supermimic.utils.helpers import (
@@ -79,9 +81,10 @@ class SuperMimicRunnerCfg:
   tasks: TasksCfg = field(default_factory=TasksCfg)
   """Per-task hyperparameters."""
   slot_mix: dict[str, float] = field(
-    default_factory=lambda: {"motion": 1.0, "velocity": 0.0}
+    default_factory=lambda: {"motion": 1.0, "velocity": 0.0, "upper_body": 0.0}
   )
-  """Fractional slot allocation per task. Must sum to 1.0."""
+  """Fractional slot allocation per task. Must sum to 1.0. The actor has the
+  upper-body encoder only when ``upper_body`` has a share."""
   policy: BpttCfg | ActorCriticCfg = field(default_factory=ActorCriticCfg)
 
   sampling_mode: Literal["uniform", "adaptive", "start", "return"] = "return"
@@ -101,6 +104,7 @@ class WorldModel:
   sim_context: SimContext
   num_goals: int
   num_actions: int
+  env: ManagerBasedRlEnv
 
   def bundle(self) -> dict:
     """The ``world_model.pt`` contents."""
@@ -176,6 +180,7 @@ def build_world_model(
     sim_context=sim_context,
     num_goals=num_goals,
     num_actions=num_actions,
+    env=env.unwrapped,
   )
 
 
@@ -189,11 +194,19 @@ def build_actor(
     if cfg.actor_obs == "rep_state"
     else representation.proprio_obs_dim(wm.num_actions)
   )
+  task_specs = resolve_task_specs(cfg.tasks, representation, wm.num_goals, device)
+  # Only a run that gives the upper-body task a share has its encoder, so the
+  # checkpoints of the other runs load as they are.
+  slot_mix = dict(cfg.slot_mix)
+  if slot_mix.get("upper_body", 0.0) > 0.0:
+    task_specs.append(make_upper_body_task(cfg.tasks.upper_body, wm.env))
+  else:
+    slot_mix.pop("upper_body", None)
   return MultiEncoderAE(
     obs_dim=obs_dim,
     action_dim=wm.num_actions,
-    task_specs=resolve_task_specs(cfg.tasks, representation, wm.num_goals, device),
-    slot_mix=cfg.slot_mix,
+    task_specs=task_specs,
+    slot_mix=slot_mix,
     latent_dim=cfg.latent_dim,
     hidden_dims=cfg.actor_hidden_dims,
     latent_bc_weight=cfg.latent_bc_weight,
