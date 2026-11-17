@@ -97,6 +97,38 @@ def test_actor_critic_bootstraps_the_surviving_last_state():
   assert torch.isfinite(stats["Policy/value_function"])
 
 
+class _EncoderDecoderActor(nn.Module):
+  def __init__(self):
+    super().__init__()
+    self.encoder = nn.Linear(1, 1)
+    self.decoder = nn.Linear(1, 1)
+
+  def forward(self, obs: TensorDict) -> torch.Tensor:
+    return self.decoder(self.encoder(obs["actor"] + 1.0))
+
+
+def test_trainable_modules_are_the_only_ones_updated():
+  actor = _EncoderDecoderActor()
+  decoder_before = [p.clone() for p in actor.decoder.parameters()]
+  encoder_before = [p.clone() for p in actor.encoder.parameters()]
+  learner = BpttPolicyLearner(
+    actor,
+    _TwoStepEnv(),
+    BpttPolicyLearnerCfg(horizon=2),
+    trainable=[actor.encoder],
+  )
+
+  learner.update()
+
+  # The return's gradient crosses the frozen decoder to reach the encoder.
+  for before, after in zip(decoder_before, actor.decoder.parameters(), strict=True):
+    assert torch.equal(before, after)
+  assert any(
+    not torch.equal(before, after)
+    for before, after in zip(encoder_before, actor.encoder.parameters(), strict=True)
+  )
+
+
 def test_gae_returns_discount_by_soft_done():
   returns = gae_returns(
     values=torch.zeros(2, 1),

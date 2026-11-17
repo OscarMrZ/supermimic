@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import torch
@@ -66,13 +67,21 @@ class BpttPolicyLearner:
     wm_env: WorldModelEnv,
     cfg: BpttPolicyLearnerCfg,
     device: str = "cpu",
+    trainable: Sequence[nn.Module] | None = None,
   ):
     self.actor = policy
     self.wm_env = wm_env
     self.cfg = cfg
-    self.actor_params = list(self.actor.parameters())
+    # ``trainable`` narrows the update to those modules of the actor. The rest is
+    # frozen and still carries the return's gradient to them.
+    modules = [self.actor] if trainable is None else list(trainable)
+    if trainable is not None:
+      self.actor.requires_grad_(False)
+      for module in modules:
+        module.requires_grad_(True)
+    self.actor_params = [p for module in modules for p in module.parameters()]
     self.actor_optimizers = build_optimizers(
-      [self.actor], self.cfg.lr, betas=(0.9, self.cfg.beta2), device=device
+      modules, self.cfg.lr, betas=(0.9, self.cfg.beta2), device=device
     )
     self._rollout_actor = (
       torch.compile(self.actor) if torch.device(device).type == "cuda" else self.actor
@@ -155,8 +164,9 @@ class ActorCriticPolicyLearner(BpttPolicyLearner):
     wm_env: WorldModelEnv,
     cfg: ActorCriticPolicyLearnerCfg,
     device: str = "cpu",
+    trainable: Sequence[nn.Module] | None = None,
   ):
-    super().__init__(policy, wm_env, cfg, device)
+    super().__init__(policy, wm_env, cfg, device, trainable)
     self.critic = critic
     self.critic_optimizers = build_optimizers([critic], self.cfg.lr, device=device)
     self._v_max = self.wm_env.max_step_reward / (1 - self.cfg.gamma)
