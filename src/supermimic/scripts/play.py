@@ -45,7 +45,7 @@ class PlayConfig:
   ``wandb_path``. ``runner`` then gives the settings the run was trained with."""
   runner: SuperMimicRunnerCfg = field(default_factory=SuperMimicRunnerCfg)
   motion_file: str | None = None
-  initial_task: Literal["motion", "velocity"] = "motion"
+  initial_task: Literal["motion", "velocity", "upper_body"] = "motion"
   """Task selected when the viewer opens. Switch live via the GUI dropdown."""
   device: str | None = None
   num_steps_rollout: int = 1000000

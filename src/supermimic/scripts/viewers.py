@@ -65,7 +65,10 @@ class SuperMimicViewerMixin:
       for name, ts in self.task_specs.items()
       if ts.precompute_replay_goal is not None
     }
-    self._replay_mode: dict[str, bool] = dict.fromkeys(self._replay_goal_tables, False)
+    # A task without sliders has no command but the one of its clip.
+    self._replay_mode: dict[str, bool] = {
+      name: not self.task_specs[name].goal_specs for name in self._replay_goal_tables
+    }
 
     mj_model = self.env.unwrapped.sim.mj_model
     joint_names = [mj_model.joint(i).name for i in range(mj_model.njnt)]
