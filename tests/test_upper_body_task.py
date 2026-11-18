@@ -1,4 +1,4 @@
-"""Tests for the upper-body task: pal_mjlab's WBC command read from the reference."""
+"""Tests for the upper-body task: the operator's command read from the reference."""
 
 from __future__ import annotations
 
@@ -6,14 +6,9 @@ import math
 from types import SimpleNamespace
 
 import mujoco
-import numpy as np
 import torch
 
-from supermimic.tasks.task_spec import (
-  UpperBodyTaskCfg,
-  make_upper_body_task,
-  reference_com_feet_distance,
-)
+from supermimic.tasks.task_spec import UpperBodyTaskCfg, make_upper_body_task
 from tests.conftest import identity_aux
 
 _XML = """
@@ -52,7 +47,7 @@ _XML = """
 """
 _NUM_FRAMES = 6
 _NUM_UPPER = 2  # pelvis_1_joint, arm_left_1_joint
-_FRAME_DIM = 11 + 2 * _NUM_UPPER
+_FRAME_DIM = 7 + 2 * _NUM_UPPER
 
 
 def _make_env(seed: int = 0) -> SimpleNamespace:
@@ -88,35 +83,14 @@ def _make_env(seed: int = 0) -> SimpleNamespace:
   )
 
 
-def test_com_feet_distance_matches_mujoco():
-  env = _make_env()
-  motion_cmd, model = env.command_manager.get_term("motion"), env.sim.mj_model
-  feet = ("leg_left_5_link", "leg_right_5_link")
-
-  distance = reference_com_feet_distance(motion_cmd, model, feet, chunk=4)
-
-  data = mujoco.MjData(model)
-  motion = motion_cmd.motion
-  for t in range(_NUM_FRAMES):
-    data.qpos[:] = np.concatenate(
-      [motion.root_pos_w[t], motion.root_quat_w[t], motion.joint_pos[t]]
-    )
-    mujoco.mj_kinematics(model, data)
-    mujoco.mj_comPos(model, data)
-    com = data.subtree_com[model.body("base_link").id]
-    midpoint = np.mean([data.body(name).xpos for name in feet], axis=0)
-    expected = np.linalg.norm(com[:2] - midpoint[:2])
-    assert math.isclose(distance[t].item(), expected, abs_tol=1e-5)
-
-
-def test_command_holds_the_wbc_terms_in_order():
+def test_command_holds_its_terms_in_order():
   env = _make_env()
   motion = env.command_manager.get_term("motion").motion
-  # Frame 2: the reference faces +y, moves along world +x and leans nowhere.
+  # Frame 2: the reference faces +y, moves along world +x and up, and leans nowhere.
   yaw = math.pi / 2
   motion.root_quat_w[2] = torch.tensor([math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)])
   motion.root_lin_vel_w[2] = torch.tensor([1.0, 0.0, 0.2])
-  motion.root_ang_vel_w[2] = torch.tensor([0.0, 0.0, 0.8])
+  motion.root_ang_vel_w[2] = torch.tensor([0.3, -0.4, 0.8])
   task = make_upper_body_task(UpperBodyTaskCfg(), env)
 
   goal = task.extract_training_goal(motion, torch.tensor([2]), identity_aux(1))[0]
@@ -124,17 +98,14 @@ def test_command_holds_the_wbc_terms_in_order():
   assert task.name == "upper_body"
   assert task.goal_dim == goal.numel() == _FRAME_DIM
   assert torch.isclose(goal[0], motion.root_pos_w[2, 2])
-  assert torch.allclose(goal[1:4], torch.tensor([0.0, -1.0, 0.2]), atol=1e-6)
-  assert torch.allclose(goal[4:7], torch.tensor([0.0, 0.0, 0.8]), atol=1e-6)
-  assert torch.allclose(goal[7:10], torch.tensor([0.0, 0.0, -1.0]), atol=1e-6)
+  # The velocity over the ground in the base frame and the yaw rate: neither the
+  # vertical velocity nor the roll and pitch rates.
+  assert torch.allclose(goal[1:3], torch.tensor([0.0, -1.0]), atol=1e-6)
+  assert torch.isclose(goal[3], torch.tensor(0.8))
+  assert torch.allclose(goal[4:7], torch.tensor([0.0, 0.0, -1.0]), atol=1e-6)
   # pelvis_1_joint and arm_left_1_joint; no leg joint.
-  assert torch.equal(goal[10:12], motion.joint_pos[2, :2])
-  assert torch.equal(goal[12:14], motion.joint_vel[2, :2])
-  feet = UpperBodyTaskCfg().feet_body_names
-  distance = reference_com_feet_distance(
-    env.command_manager.get_term("motion"), env.sim.mj_model, feet
-  )
-  assert torch.isclose(goal[14], distance[2])
+  assert torch.equal(goal[7:9], motion.joint_pos[2, :2])
+  assert torch.equal(goal[9:11], motion.joint_vel[2, :2])
 
 
 def test_command_does_not_depend_on_the_robot():

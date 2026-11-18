@@ -13,17 +13,15 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-import mujoco
 import torch
-from mjlab.utils.forward_kinematics import ForwardKinematics
-from mjlab.utils.lab_api.math import quat_apply, quat_apply_inverse
+from mjlab.utils.lab_api.math import quat_apply_inverse
 from tensordict import TensorDict
 
 from supermimic.representations import actor_goal_dim, goal_window_indices
 
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
-  from mjlab.tasks.tracking.mdp.commands import MotionCommand, MotionLoader
+  from mjlab.tasks.tracking.mdp.commands import MotionLoader
 
   from supermimic.representations import StateRepresentation
 
@@ -181,61 +179,20 @@ def make_velocity_task(
   )
 
 
-def reference_com_feet_distance(
-  motion_cmd: "MotionCommand",
-  mj_model: mujoco.MjModel,
-  feet_body_names: tuple[str, ...],
-  chunk: int = 65536,
-) -> torch.Tensor:
-  """Horizontal distance between the reference's centre of mass and the midpoint
-  of its feet, for every motion frame, ``(num_frames,)``.
-
-  The centre of mass is that of the whole robot on the nominal model, from the
-  forward kinematics of every body. pal_mjlab's WBC calls this "CoM vs CoP": it is
-  zero when the reference stands balanced over its feet.
-  """
-  robot, motion = motion_cmd.robot, motion_cmd.motion
-  body_ids = robot.indexing.body_ids
-  device = motion.joint_pos.device
-  fk = ForwardKinematics(
-    mj_model,
-    body_ids,
-    robot.indexing.joint_q_adr,
-    torch.arange(len(body_ids)),
-    device=str(device),
-  )
-  ids = body_ids.cpu().numpy()
-  mass = torch.as_tensor(mj_model.body_mass[ids], dtype=torch.float32, device=device)
-  ipos = torch.as_tensor(mj_model.body_ipos[ids], dtype=torch.float32, device=device)
-  feet = [robot.body_names.index(name) for name in feet_body_names]
-  distance = []
-  for frames in torch.arange(motion.time_step_total, device=device).split(chunk):
-    # The robot's joints the motion leaves out follow from the ones it holds.
-    joint_pos, joint_vel = motion_cmd.full_joint_state(
-      motion.joint_pos[frames], motion.joint_vel[frames]
-    )
-    pos, quat, _, _ = fk(
-      motion.root_pos_w[frames],
-      motion.root_quat_w[frames],
-      joint_pos,
-      motion.root_lin_vel_w[frames],
-      motion.root_ang_vel_w[frames],
-      joint_vel,
-    )
-    com = pos + quat_apply(quat, ipos.expand_as(pos))
-    com = (com * mass[:, None]).sum(dim=-2) / mass.sum()
-    distance.append((com[:, :2] - pos[:, feet, :2].mean(dim=-2)).norm(dim=-1))
-  return torch.cat(distance)
-
-
 def make_upper_body_task(cfg: "UpperBodyTaskCfg", env: "ManagerBasedRlEnv") -> TaskSpec:
-  """Upper-body task: the command of pal_mjlab's WBC, read from the reference.
+  """Upper-body task: the reference's base and upper body, as an operator commands
+  them.
 
-  Per frame ``[base height(1), base lin vel(3), base ang vel(3), gravity(3),
-  upper joint pos(U), upper joint vel(U), CoM to feet distance(1)]``. Velocities
-  and gravity are in the reference's own base frame, so the command follows from
-  the motion alone and holds neither a heading nor a leg joint. The legs are left
-  to the policy, which still earns the tracking reward of the whole body.
+  Per frame ``[base height(1), base lin vel x y(2), base yaw rate(1), gravity(3),
+  upper joint pos(U), upper joint vel(U)]``. Velocities and gravity are in the
+  reference's own base frame, so the command follows from the motion alone and
+  holds neither a heading nor a leg joint. The legs are left to the policy, which
+  still earns the tracking reward of the whole body.
+
+  It is the command of pal_mjlab's WBC without what no operator sends: the
+  vertical velocity and the roll and pitch rates, which the frames of the height
+  and of the gravity already tell, and the distance from the centre of mass to
+  the feet.
   """
   motion_cmd = env.command_manager.get_term("motion")
   joint_names = motion_cmd.motion.fk.joint_names
@@ -243,9 +200,6 @@ def make_upper_body_task(cfg: "UpperBodyTaskCfg", env: "ManagerBasedRlEnv") -> T
   upper = torch.tensor(
     [i for i, name in enumerate(joint_names) if cfg.leg_joint_token not in name],
     device=device,
-  )
-  com_feet = reference_com_feet_distance(
-    motion_cmd, env.sim.mj_model, cfg.feet_body_names
   )
   gravity = torch.tensor([0.0, 0.0, -1.0], device=device)
 
@@ -255,12 +209,11 @@ def make_upper_body_task(cfg: "UpperBodyTaskCfg", env: "ManagerBasedRlEnv") -> T
     frames = torch.cat(
       [
         motion.root_pos_w[idx][..., 2:3],
-        quat_apply_inverse(quat, motion.root_lin_vel_w[idx]),
-        quat_apply_inverse(quat, motion.root_ang_vel_w[idx]),
+        quat_apply_inverse(quat, motion.root_lin_vel_w[idx])[..., :2],
+        quat_apply_inverse(quat, motion.root_ang_vel_w[idx])[..., 2:3],
         quat_apply_inverse(quat, gravity.expand(*idx.shape, 3)),
         motion.joint_pos[idx][..., upper],
         motion.joint_vel[idx][..., upper],
-        com_feet[idx].unsqueeze(-1),
       ],
       dim=-1,
     )
@@ -270,7 +223,7 @@ def make_upper_body_task(cfg: "UpperBodyTaskCfg", env: "ManagerBasedRlEnv") -> T
     times = torch.arange(motion.time_step_total, device=motion.joint_pos.device)
     return command(motion, times)
 
-  goal_dim = cfg.goal_frames * (11 + 2 * len(upper))
+  goal_dim = cfg.goal_frames * (7 + 2 * len(upper))
   return TaskSpec(
     name="upper_body",
     goal_dim=goal_dim,
@@ -302,12 +255,10 @@ class UpperBodyTaskCfg:
   """Upper-body task: the reference's base and upper body, without its legs."""
 
   goal_frames: int = 1
-  """Reference frames in the command, ``goal_stride`` motion frames apart. One
-  frame, the current one, is the command of pal_mjlab's WBC."""
+  """Reference frames in the command, ``goal_stride`` motion frames apart, the
+  first one being the current one."""
   goal_stride: int = 1
   """Motion frames between the command's frames."""
-  feet_body_names: tuple[str, ...] = ("leg_left_5_link", "leg_right_5_link")
-  """Bodies whose midpoint the reference's centre of mass is measured from."""
   leg_joint_token: str = "leg"
   """Joints with this in their name are left out of the command."""
 
