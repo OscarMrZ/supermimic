@@ -10,9 +10,10 @@ import mjlab.tasks  # noqa: F401
 import tyro
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.tasks.registry import list_tasks, load_env_cfg
-from pal_mjlab.tasks.WBC.mdp.commands import OnlineMotionCommandCfg
+from mjlab.tasks.tracking.mdp.commands import MotionCommandCfg
 
 import supermimic.tasks  # noqa: F401
+from supermimic.motion_api import motion_command_cfg, set_motion_source
 from supermimic.representations import set_goal_window
 from supermimic.runners.supermimic_runner import SuperMimicRunner, SuperMimicRunnerCfg
 from supermimic.scripts.train_utils import (
@@ -71,34 +72,35 @@ def main() -> None:
   device = setup_device(args.device)
   print(f"[INFO] Loading environment: {chosen_task}")
 
-  motion_cmd = args.env.commands["motion"]
-  if args.motion_file and isinstance(motion_cmd, OnlineMotionCommandCfg):
-    # pal_mjlab's CSV command: one folder of clips.
-    motion_cmd.motion_dir = os.path.expanduser(args.motion_file)
-    print(f"[INFO] Using local motion folder: {args.motion_file}")
-  elif args.motion_file:
-    # Local motions handed straight to MotionLoader (globs/concatenates).
+  if args.motion_file:
+    # Local motions: npz files (globs/concatenates, comma list) for mjlab_research's
+    # command, a CSV folder for pal_mjlab's.
     if "," in args.motion_file:
-      args.env.commands["motion"].motion_file = [
-        os.path.expanduser(p.strip()) for p in args.motion_file.split(",")
-      ]
+      paths = [os.path.expanduser(p.strip()) for p in args.motion_file.split(",")]
+      set_motion_source(args.env, paths)
     else:
-      args.env.commands["motion"].motion_file = os.path.expanduser(args.motion_file)
+      set_motion_source(args.env, os.path.expanduser(args.motion_file))
     args.registry_name = None  # avoid linking a stale registry artifact for lineage
     print(f"[INFO] Using local motion file: {args.motion_file}")
   else:
     motion_file = download_registry_motions(args.registry_name)
     if motion_file is not None:
-      args.env.commands["motion"].motion_file = motion_file
+      set_motion_source(args.env, motion_file)
 
   # Auto-detect representation from task_id if not explicitly set
   if "MaxCoord" in chosen_task and args.runner.representation == "gencoord":
     args.runner.representation = "maxcoord"
     print("[INFO] Auto-detected maxcoord representation from task_id")
 
-  args.env.commands["motion"].sampling_mode = (
-    "external" if args.runner.sampling_mode == "return" else args.runner.sampling_mode
-  )
+  motion_cfg = motion_command_cfg(args.env)
+  if args.runner.sampling_mode == "return":
+    if not isinstance(motion_cfg, MotionCommandCfg):
+      raise ValueError(
+        "--runner.sampling-mode return needs mjlab_research's motion command"
+      )
+    motion_cfg.sampling_mode = "external"
+  else:
+    motion_cfg.sampling_mode = args.runner.sampling_mode
 
   set_goal_window(args.runner.goal_frames, args.runner.goal_stride)
   env = create_env(args.env, args.num_envs, device)

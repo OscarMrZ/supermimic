@@ -11,6 +11,7 @@ from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.tasks.registry import list_tasks, load_env_cfg
 
 import supermimic.tasks  # noqa: F401
+from supermimic.motion_api import set_motion_source
 from supermimic.runners.ppo_runner import PpoRunner, PpoRunnerCfg
 from supermimic.scripts.train_utils import (
   create_env,
@@ -59,17 +60,16 @@ def main() -> None:
 
   if args.motion_file:
     if "," in args.motion_file:
-      args.env.commands["motion"].motion_file = [
-        os.path.expanduser(p.strip()) for p in args.motion_file.split(",")
-      ]
+      paths = [os.path.expanduser(p.strip()) for p in args.motion_file.split(",")]
+      set_motion_source(args.env, paths)
     else:
-      args.env.commands["motion"].motion_file = os.path.expanduser(args.motion_file)
+      set_motion_source(args.env, os.path.expanduser(args.motion_file))
     args.registry_name = None
     print(f"[INFO] Using local motion file: {args.motion_file}")
   else:
     motion_file = download_registry_motions(args.registry_name)
     if motion_file is not None:
-      args.env.commands["motion"].motion_file = motion_file
+      set_motion_source(args.env, motion_file)
 
   if "MaxCoord" in chosen_task and args.runner.representation == "gencoord":
     args.runner.representation = "maxcoord"

@@ -7,22 +7,34 @@ Representation-specific helpers live in dedicated modules:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 import torch
+from tensordict import TensorDict
+
+if TYPE_CHECKING:
+  from mjlab.envs.mdp.actions.actions import BaseAction
+  from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.utils.lab_api.math import matrix_from_quat, quat_mul
 
 
-def extract_action_scale_offset(env: object) -> tuple[torch.Tensor, torch.Tensor]:
+def extract_action_scale_offset(
+  env: RslRlVecEnvWrapper,
+) -> tuple[torch.Tensor, torch.Tensor]:
   """Extract action scale and default offset from an env's action manager.
 
   Returns 1-D tensors (squeezed to a single row if batched).
   """
   action_manager = env.unwrapped.action_manager
-  action_term = action_manager.get_term(action_manager.active_terms[0])
+  action_term = cast(
+    "BaseAction", action_manager.get_term(action_manager.active_terms[0])
+  )
   device = env.unwrapped.device
-  scale = action_term.scale.to(device).float()
+  # A scalar scale/offset (a float in the action cfg) is a 0-d tensor here.
+  scale = torch.as_tensor(action_term.scale, device=device, dtype=torch.float32)
   if scale.dim() > 1:
     scale = scale[0:1]
-  offset = action_term._offset.to(device).float()
+  offset = torch.as_tensor(action_term._offset, device=device, dtype=torch.float32)
   if offset.dim() > 1:
     offset = offset[0:1]
   return scale, offset
@@ -129,14 +141,14 @@ def quat_to_rot6d(quat: torch.Tensor) -> torch.Tensor:
   return mat[..., :2].flatten(-2, -1)  # (..., 6)
 
 
-def unpack_obs_dims(obs: object) -> tuple[int, int]:
+def unpack_obs_dims(obs: TensorDict | torch.Tensor) -> tuple[int, int]:
   """Extract full_state and goal dimensions from observations.
 
   Handles both TensorDict (keyed) and raw tensor observations.
   """
-  state_obs = obs["full_state"] if hasattr(obs, "keys") else obs
-  goal_obs = obs["goal"] if hasattr(obs, "keys") else obs
-  return state_obs.shape[-1], goal_obs.shape[-1]
+  if isinstance(obs, torch.Tensor):
+    return obs.shape[-1], obs.shape[-1]
+  return obs["full_state"].shape[-1], obs["goal"].shape[-1]
 
 
 def rodrigues_precompute(

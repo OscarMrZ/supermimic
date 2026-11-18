@@ -1,8 +1,11 @@
+from typing import cast
+
 import pytest
 import torch
 import torch.nn as nn
 from tensordict import TensorDict
 
+from supermimic.envs.world_model_env import WorldModelEnv
 from supermimic.learners.policy_learner import (
   ActorCriticPolicyLearner,
   ActorCriticPolicyLearnerCfg,
@@ -25,6 +28,11 @@ class _DummyActor(nn.Module):
 
 class _DummyRepresentation(nn.Module):
   dt = 1.0
+
+
+def _two_step_env() -> WorldModelEnv:
+  """The duck-typed env below, as the learner reads it."""
+  return cast(WorldModelEnv, _TwoStepEnv())
 
 
 class _TwoStepEnv:
@@ -72,7 +80,7 @@ class _ConstantCritic(nn.Module):
 def test_survival_masking_counts_current_transition_reward_before_done():
   learner = BpttPolicyLearner(
     _DummyActor(),
-    _TwoStepEnv(),
+    _two_step_env(),
     BpttPolicyLearnerCfg(horizon=2, gamma=1.0, survival_masking=True),
   )
 
@@ -86,7 +94,7 @@ def test_actor_critic_bootstraps_the_surviving_last_state():
   learner = ActorCriticPolicyLearner(
     _DummyActor(),
     _ConstantCritic(1.0),
-    _TwoStepEnv(),
+    _two_step_env(),
     ActorCriticPolicyLearnerCfg(horizon=2, gamma=0.99, survival_masking=True),
   )
 
@@ -114,7 +122,7 @@ def test_trainable_modules_are_the_only_ones_updated():
   encoder_before = [p.clone() for p in actor.encoder.parameters()]
   learner = BpttPolicyLearner(
     actor,
-    _TwoStepEnv(),
+    _two_step_env(),
     BpttPolicyLearnerCfg(horizon=2),
     trainable=[actor.encoder],
   )

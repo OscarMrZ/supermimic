@@ -7,7 +7,7 @@ from supermimic.representations import (
   MaxCoordRepresentation,
   create_representation,
 )
-from tests.conftest import identity_aux
+from tests.conftest import grad_of, identity_aux
 
 # ---------------------------------------------------------------------------
 # create_representation factory
@@ -96,8 +96,8 @@ class TestGenCoordApplyPrediction:
       next_aux, next_rep = rep.apply_prediction(aux, curr, pred, dt=0.01)
       loss = next_rep.sum() + next_aux.sum()
       loss.backward()
-      assert not pred.grad.isnan().any(), f"NaN at scale {scale}"
-      assert not pred.grad.isinf().any(), f"Inf at scale {scale}"
+      assert not grad_of(pred).isnan().any(), f"NaN at scale {scale}"
+      assert not grad_of(pred).isinf().any(), f"Inf at scale {scale}"
 
   def test_gradient_stable_across_scales(self):
     """Gradient norms should not explode as prediction shrinks."""
@@ -110,7 +110,7 @@ class TestGenCoordApplyPrediction:
       pred = (torch.randn(4, rep.prediction_dim) * scale).requires_grad_(True)
       next_aux, next_rep = rep.apply_prediction(aux, curr, pred, dt=0.01)
       (next_rep.sum() + next_aux.sum()).backward()
-      grad_norms.append(pred.grad.norm().item())
+      grad_norms.append(grad_of(pred).norm().item())
     assert max(grad_norms) / min(grad_norms) < 10.0
 
 
@@ -146,12 +146,11 @@ class TestGenCoordAccelPrediction:
 
   def test_substep_coeff_from_decimation(self):
     for decimation, expected in ((1, 1.0), (2, 0.75), (4, 0.625)):
-      args = dict(
-        num_actions=4, dt=0.02,
+      rep = create_representation(
+        "gencoord", 13 + 2 * NUM_JOINTS, num_actions=4, dt=0.02,
         decimation=decimation, default_joint_pos=torch.zeros(NUM_JOINTS),
         actor_obs_mode="rep_state",
       )  # fmt: skip
-      rep = create_representation("gencoord", 13 + 2 * NUM_JOINTS, **args)
       assert rep.substep_coeff == expected
 
   def test_pose_weighted_velocity_full(self):
@@ -179,8 +178,8 @@ class TestGenCoordAccelPrediction:
     pred = (torch.randn(4, rep.prediction_dim) * 0.1).requires_grad_(True)
     next_aux, next_rep = rep.apply_prediction(aux, curr, pred, dt=0.02)
     (next_rep.sum() + next_aux.sum()).backward()
-    assert torch.isfinite(pred.grad).all()
-    assert (pred.grad.abs().sum(dim=0) > 0).all()
+    assert torch.isfinite(grad_of(pred)).all()
+    assert (grad_of(pred).abs().sum(dim=0) > 0).all()
 
 
 class TestGenCoordComputeWmObs:
@@ -242,6 +241,8 @@ class TestProprioNoiseSpecConsistency:
   """env_cfg's `_sensor_actor_group` and rep.proprio_noise_bounds must agree."""
 
   def test_env_cfg_terms_match_half_widths(self):
+    from mjlab.utils.noise import UniformNoiseCfg
+
     from supermimic.representations import PROPRIO_NOISE_HALF_WIDTHS
     from supermimic.tasks.env_cfgs import _sensor_actor_group
 
@@ -252,5 +253,6 @@ class TestProprioNoiseSpecConsistency:
       if half == 0:
         assert term.noise is None, f"{name}: expected no noise, got {term.noise}"
       else:
+        assert isinstance(term.noise, UniformNoiseCfg), name
         assert term.noise.n_min == -half, name
         assert term.noise.n_max == half, name

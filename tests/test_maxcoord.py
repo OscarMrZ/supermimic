@@ -27,6 +27,7 @@ from supermimic.utils.maxcoord_helpers import (
   world_frame_bodies,
 )
 from supermimic.utils.tracking_reward import _reanchor_targets, tracking_reward
+from tests.conftest import grad_of
 
 NUM_BODIES = 16
 
@@ -253,7 +254,7 @@ class TestMaxCoordApplyPrediction:
     pos_loss = next_rep[..., : B * 3].sum()
     pos_loss.backward()
     # Velocity part of prediction should have nonzero gradient
-    vel_grad = pred.grad[..., : B * 3]
+    vel_grad = grad_of(pred)[..., : B * 3]
     assert vel_grad.abs().sum() > 0
 
 
@@ -319,8 +320,8 @@ class TestRotationErrorMagnitude:
     m = matrix_from_quat(q).requires_grad_(True)
     err_sq = rotation_error_magnitude(m, m.detach()) ** 2
     err_sq.sum().backward()
-    assert not m.grad.isnan().any()
-    assert not m.grad.isinf().any()
+    assert not grad_of(m).isnan().any()
+    assert not grad_of(m).isinf().any()
 
   def test_gradient_finite_near_pi_error(self):
     """Gradient of angle² must be finite at 180°."""
@@ -328,8 +329,8 @@ class TestRotationErrorMagnitude:
     m2 = torch.tensor([[-1.0, 0, 0], [0, -1.0, 0], [0, 0, 1.0]]).unsqueeze(0)
     err_sq = rotation_error_magnitude(m1, m2) ** 2
     err_sq.sum().backward()
-    assert not m1.grad.isnan().any()
-    assert not m1.grad.isinf().any()
+    assert not grad_of(m1).isnan().any()
+    assert not grad_of(m1).isinf().any()
 
 
 class TestReanchorTargets:
@@ -388,8 +389,8 @@ class TestApplyPredictionGradient:
       next_aux, next_rep = rep.apply_prediction(aux, curr, pred, dt=0.01)
       loss = next_rep.sum() + next_aux.sum()
       loss.backward()
-      assert not pred.grad.isnan().any(), f"NaN at scale {scale}"
-      assert not pred.grad.isinf().any(), f"Inf at scale {scale}"
+      assert not grad_of(pred).isnan().any(), f"NaN at scale {scale}"
+      assert not grad_of(pred).isinf().any(), f"Inf at scale {scale}"
 
   def test_gradient_from_rep_loss(self):
     """Full rep state loss should give gradient to all prediction dims."""
@@ -401,7 +402,7 @@ class TestApplyPredictionGradient:
     _, next_rep = rep.apply_prediction(aux, curr, pred, dt=0.01)
     next_rep.sum().backward()
     # Every prediction dim should receive some gradient
-    assert (pred.grad.abs().sum(dim=0) > 0).all()
+    assert (grad_of(pred).abs().sum(dim=0) > 0).all()
 
   def test_gradient_from_aux_loss(self):
     """Aux state loss should give gradient to prediction (through vel integration)."""
@@ -412,7 +413,7 @@ class TestApplyPredictionGradient:
     pred = (torch.randn(4, rep.prediction_dim) * 0.01).requires_grad_(True)
     next_aux, _ = rep.apply_prediction(aux, curr, pred, dt=0.01)
     next_aux.sum().backward()
-    assert pred.grad.abs().sum() > 0
+    assert grad_of(pred).abs().sum() > 0
 
   def test_gradient_norm_bounded_across_scales(self):
     """Gradient norms should stay bounded as prediction scale shrinks."""
@@ -425,7 +426,7 @@ class TestApplyPredictionGradient:
       pred = (torch.randn(4, rep.prediction_dim) * scale).requires_grad_(True)
       next_aux, next_rep = rep.apply_prediction(aux, curr, pred, dt=0.01)
       (next_rep.sum() + next_aux.sum()).backward()
-      grad_norms.append(pred.grad.norm().item())
+      grad_norms.append(grad_of(pred).norm().item())
     assert max(grad_norms) / min(grad_norms) < 10.0
 
 
@@ -548,8 +549,8 @@ class TestWorldFrameConsistency:
     next_full = rep.reconstruct_full_state(next_aux, next_rep)
     next_full.sum().backward()
     assert pred.grad is not None
-    assert not pred.grad.isnan().any()
-    assert (pred.grad.abs().sum(dim=0) > 0).all(), (
+    assert not grad_of(pred).isnan().any()
+    assert (grad_of(pred).abs().sum(dim=0) > 0).all(), (
       "Some prediction dims got no gradient"
     )
 
@@ -591,10 +592,12 @@ class TestEndToEndRewardGradient:
     reward.sum().backward()
 
     assert pred.grad is not None
-    assert not pred.grad.isnan().any()
-    assert not pred.grad.isinf().any()
-    assert pred.grad[..., : B * 3].abs().sum() > 0, "No gradient to vel_delta"
-    assert pred.grad[..., B * 3 : B * 6].abs().sum() > 0, "No gradient to avel_delta"
+    assert not grad_of(pred).isnan().any()
+    assert not grad_of(pred).isinf().any()
+    assert grad_of(pred)[..., : B * 3].abs().sum() > 0, "No gradient to vel_delta"
+    assert grad_of(pred)[..., B * 3 : B * 6].abs().sum() > 0, (
+      "No gradient to avel_delta"
+    )
 
   def test_reward_gradient_finite_at_zero_error(self):
     """No NaN when predicted bodies coincide with targets (acos singularity hotspot)."""
@@ -626,5 +629,5 @@ class TestEndToEndRewardGradient:
     )
     reward.sum().backward()
 
-    assert not pred.grad.isnan().any()
-    assert not pred.grad.isinf().any()
+    assert not grad_of(pred).isnan().any()
+    assert not grad_of(pred).isinf().any()

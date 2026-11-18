@@ -14,7 +14,7 @@ from mjlab.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env
 from mjlab.tasks.tracking.config.kangaroo.env_cfgs import (
   pal_kangaroo_flat_tracking_env_cfg,
 )
-from mjlab.tasks.tracking.mdp.commands import MotionCommand
+from mjlab.tasks.tracking.mdp.commands import MotionCommand, MotionCommandCfg
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 
 from supermimic.representations import (
@@ -146,6 +146,14 @@ def _sensor_actor_group() -> ObservationGroupCfg:
   )
 
 
+def _motion_cfg(cfg: ManagerBasedRlEnvCfg) -> MotionCommandCfg:
+  """The tracking cfg's motion command (mjlab_research's npz command)."""
+  assert cfg.commands is not None
+  motion = cfg.commands["motion"]
+  assert isinstance(motion, MotionCommandCfg)
+  return motion
+
+
 def full_state_group() -> ObservationGroupCfg:
   """The world model's generalized-coordinate state, every joint of the robot.
 
@@ -202,7 +210,7 @@ def kangaroo_gencoord_env_cfg(
   gyro.func, gyro.params = mdp.base_ang_vel, {}
   # The state, the sensors and the joint-limit reward read the motion's joints,
   # which leave out the passive femur and knee joints.
-  joints = SceneEntityCfg("robot", joint_names=cfg.commands["motion"].joint_names)
+  joints = SceneEntityCfg("robot", joint_names=_motion_cfg(cfg).joint_names)
   actor = cfg.observations["actor"].terms
   for term in (actor["joint_pos"], actor["joint_vel"], cfg.rewards["joint_limit"]):
     term.params["asset_cfg"] = joints
@@ -219,7 +227,7 @@ def _gencoord_env_cfg(
   cfg: ManagerBasedRlEnvCfg, root_body_name: str
 ) -> ManagerBasedRlEnvCfg:
   """Turn a tracking configuration into the generalized-coordinate world model one."""
-  cfg.commands["motion"].anchor_body_name = root_body_name
+  _motion_cfg(cfg).anchor_body_name = root_body_name
 
   cfg.observations["actor"] = _sensor_actor_group()
 

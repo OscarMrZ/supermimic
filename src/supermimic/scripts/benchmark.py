@@ -14,6 +14,7 @@ from mjlab.tasks.registry import load_env_cfg
 from mjlab.utils.torch import configure_torch_backends
 
 import supermimic.tasks  # noqa: F401
+from supermimic.motion_api import set_motion_source
 from supermimic.representations import extract_actor_goal
 from supermimic.runners.run_config import check_representation_matches, load_runner_cfg
 from supermimic.runners.supermimic_runner import build_actor, build_world_model
@@ -77,7 +78,7 @@ def benchmark(cfg: BenchmarkConfig) -> None:
       env_cfg.scene.num_envs = n_envs
 
       if motion_file_path:
-        env_cfg.commands["motion"].motion_file = motion_file_path
+        set_motion_source(env_cfg, motion_file_path)
 
       base_env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
       env = RslRlVecEnvWrapper(base_env)
@@ -89,14 +90,13 @@ def benchmark(cfg: BenchmarkConfig) -> None:
       sim_ctx = wm.sim_context.read(env.unwrapped)
 
       policy = None
+      actions = torch.rand((n_envs, wm.num_actions), device=device) * 2 - 1
       if cfg.use_policy:
         assert policy_state_dict is not None  # use_policy gated the load above
         policy = build_actor(runner_cfg, wm, device)
         policy.set_slot_mix({"motion": 1.0})
         policy.load_state_dict(policy_state_dict)
         policy.eval()
-      else:
-        actions = torch.rand((n_envs, wm.num_actions), device=device) * 2 - 1
 
       obs, _ = env.reset()
 

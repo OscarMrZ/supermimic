@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock
 
 import torch
@@ -15,6 +16,9 @@ from supermimic.tasks.task_spec import (
 )
 from tests.conftest import identity_aux
 
+if TYPE_CHECKING:
+  from supermimic.motion_api import MotionLibrary
+
 
 class FakeMotion:
   """Minimal MotionLoader stand-in: just needs root_lin_vel_w + root_ang_vel_w."""
@@ -24,6 +28,13 @@ class FakeMotion:
   ) -> None:
     self.root_lin_vel_w = root_lin_vel_w
     self.root_ang_vel_w = root_ang_vel_w
+
+
+def _motion(
+  root_lin_vel_w: torch.Tensor, root_ang_vel_w: torch.Tensor
+) -> MotionLibrary:
+  """A FakeMotion, as the task reads its motion."""
+  return cast("MotionLibrary", FakeMotion(root_lin_vel_w, root_ang_vel_w))
 
 
 def _velocity_task(
@@ -48,7 +59,7 @@ class TestVelocityExtraction:
     ang = torch.zeros(5, 3)
     lin[2] = torch.tensor([1.0, 0.5, 0.7])  # z-component should be dropped
     ang[2] = torch.tensor([0.2, 0.3, 1.5])  # only z used for yaw rate
-    motion = FakeMotion(lin, ang)
+    motion = _motion(lin, ang)
 
     velocity_task = _velocity_task()
     motion_times = torch.tensor([2])
@@ -63,7 +74,7 @@ class TestVelocityExtraction:
     ang = torch.zeros(5, 3)
     lin[0] = torch.tensor([1.0, 0.0, 0.0])
     ang[0] = torch.tensor([0.0, 0.0, 0.8])  # world yaw rate = body yaw rate
-    motion = FakeMotion(lin, ang)
+    motion = _motion(lin, ang)
 
     velocity_task = _velocity_task()
     aux = torch.zeros(1, 7)
@@ -84,7 +95,7 @@ class TestCenteredWindow:
     lin[3] = torch.tensor([1.0, 0.0, 0.0])
     lin[4] = torch.tensor([2.0, 0.0, 0.0])
     lin[5] = torch.tensor([3.0, 0.0, 0.0])
-    motion = FakeMotion(lin, ang)
+    motion = _motion(lin, ang)
 
     task = _velocity_task(window_frames=3)
     goal = task.extract_training_goal(motion, torch.tensor([4]), identity_aux(1))
@@ -98,7 +109,7 @@ class TestCenteredWindow:
     # window=3 at t=0 → indices {-1, 0, 1} → clamped {0, 0, 1}.
     # lin[0]=3, lin[1]=0 → mean = (3+3+0)/3 = 2.0.
     lin[0] = torch.tensor([3.0, 0.0, 0.0])
-    motion = FakeMotion(lin, ang)
+    motion = _motion(lin, ang)
 
     task = _velocity_task(window_frames=3)
     goal = task.extract_training_goal(motion, torch.tensor([0]), identity_aux(1))
@@ -111,7 +122,7 @@ class TestCenteredWindow:
     # 5 frames (0..4). window=3 at t=4 → indices {3, 4, 5} → clamped {3, 4, 4}.
     # lin[3]=0, lin[4]=3 → mean = (0+3+3)/3 = 2.0.
     lin[4] = torch.tensor([3.0, 0.0, 0.0])
-    motion = FakeMotion(lin, ang)
+    motion = _motion(lin, ang)
 
     task = _velocity_task(window_frames=3)
     goal = task.extract_training_goal(motion, torch.tensor([4]), identity_aux(1))
@@ -121,7 +132,7 @@ class TestCenteredWindow:
 class TestCommandNoise:
   def test_zero_motion_with_noise_stays_in_half_width(self):
     """With reference = 0 and noise half-width h, output is in [-h, +h]."""
-    motion = FakeMotion(torch.zeros(2, 3), torch.zeros(2, 3))
+    motion = _motion(torch.zeros(2, 3), torch.zeros(2, 3))
     task = _velocity_task(command_noise=(0.4, 0.2, 0.6))
     motion_times = torch.zeros(64, dtype=torch.long)
     cmd = task.extract_training_goal(motion, motion_times, identity_aux(64))
@@ -131,7 +142,7 @@ class TestCommandNoise:
 
   def test_clamped_to_cfg_ranges(self):
     """Huge noise still bounded by configured ranges (cfg lo/hi clamp)."""
-    motion = FakeMotion(torch.zeros(2, 3), torch.zeros(2, 3))
+    motion = _motion(torch.zeros(2, 3), torch.zeros(2, 3))
     task = make_velocity_task(
       lin_vel_x_range=(-1.0, 1.0),
       lin_vel_y_range=(-0.5, 0.5),
@@ -151,6 +162,7 @@ class TestInferenceHelpers:
     """Raw goal is already body-frame; build_obs is a passthrough."""
     velocity_task = _velocity_task()
     raw = torch.tensor([[0.5, -0.2, 0.3]])
+    assert velocity_task.build_inference_goal_obs is not None
     obs = velocity_task.build_inference_goal_obs(raw)
     assert obs.shape == (1, 3)
     assert torch.allclose(obs[0], raw[0])

@@ -183,6 +183,6 @@ class TestUpdateNormalization:
     # so the update must skip empty slots.
     actor = _make_actor(slot_mix={"motion": 1.0}).train()
     actor.update_normalization(make_actor_obs(BATCH))
-    vel_norm = actor.goal_normalizers["velocity"]
+    vel_norm = actor._goal_normalizer("velocity")
     assert torch.isfinite(vel_norm._mean).all()
     assert torch.isfinite(vel_norm._std).all()

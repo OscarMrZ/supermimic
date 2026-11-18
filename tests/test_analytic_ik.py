@@ -13,6 +13,7 @@ import pytest
 import torch
 from mjlab.asset_zoo.robots.unitree_g1.g1_constants import G1_XML
 
+from supermimic.motion_api import motion_command_cfg
 from supermimic.representations import MaxCoordRepresentation
 from supermimic.sim_context import (
   CoMOffsetSpec,
@@ -23,7 +24,7 @@ from supermimic.sim_context import (
 from supermimic.tasks.env_cfgs import maxcoord_env_cfg
 from supermimic.utils.analytic_ik import AnalyticIK
 from supermimic.utils.helpers import rot6d_to_matrix
-from tests.conftest import identity_aux, make_mock_sim_context
+from tests.conftest import fake_env, grad_of, identity_aux, make_mock_sim_context
 
 WRIST_PITCH = ("left_wrist_pitch_joint", "right_wrist_pitch_joint")
 WRIST_OUTER = (
@@ -47,11 +48,13 @@ class G1:
     self.dof_adr = [int(self.model.jnt_dofadr[j]) for j in joints]
     self.lo, self.hi = self.model.jnt_range[joints].T
     self.cfg = maxcoord_env_cfg()
-    factor = self.cfg.scene.entities["robot"].articulation.soft_joint_pos_limit_factor
+    articulation = self.cfg.scene.entities["robot"].articulation
+    assert articulation is not None
+    factor = articulation.soft_joint_pos_limit_factor
     mid, half = (self.lo + self.hi) / 2, (self.hi - self.lo) / 2
     soft = np.stack([mid - factor * half, mid + factor * half], -1)
     self.soft_limits = torch.tensor(soft, dtype=torch.float32)
-    body_names = self.cfg.commands["motion"].body_names
+    body_names = motion_command_cfg(self.cfg).body_names
     self.body_ids = [self.model.body(n).id for n in body_names]
     self.num_bodies, self.num_joints = len(self.body_ids), len(joints)
 
@@ -116,7 +119,7 @@ def _bound(
     body_indexes=torch.tensor(g1.body_ids), joint_ids=torch.arange(g1.num_joints)
   )
   data = SimpleNamespace(soft_joint_pos_limits=g1.soft_limits[None])
-  env = SimpleNamespace(
+  env = fake_env(
     scene={"robot": SimpleNamespace(indexing=indexing, data=data)},
     sim=SimpleNamespace(mj_model=g1.model),
     command_manager=SimpleNamespace(get_term=lambda _: motion),
@@ -159,7 +162,7 @@ def _backward_is_bounded(ik: AnalyticIK, rots: torch.Tensor, avels: torch.Tensor
   qp, qv = ik(rot6d_to_matrix(rot6d), avels)
   assert torch.isfinite(qp).all() and torch.isfinite(qv).all()
   (qp.sum() + qv.sum()).backward()
-  assert rot6d.grad.abs().max() < 1e4 and avels.grad.abs().max() < 1e4
+  assert grad_of(rot6d).abs().max() < 1e4 and grad_of(avels).abs().max() < 1e4
 
 
 def test_gimbal_backward_is_finite_and_bounded(g1: G1) -> None:

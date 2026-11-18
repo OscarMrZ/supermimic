@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import torch
 import torch.nn as nn
@@ -50,6 +50,9 @@ class Dynamics(nn.Module):
   policy sees back as ``last_action`` in its observation. Dynamics applies
   ``proc = action * scale + offset`` internally before normalization.
   """
+
+  action_scale: torch.Tensor
+  action_offset: torch.Tensor
 
   def __init__(
     self,
@@ -236,6 +239,9 @@ class MultiEncoderAE(nn.Module):
       return {}
     return {"bc_loss": self._aux_loss.mean().detach()}
 
+  def _goal_normalizer(self, name: str) -> _CudaGraphNormalization:
+    return cast(_CudaGraphNormalization, self.goal_normalizers[name])
+
   @torch.jit.unused
   def update_normalization(self, obs_td: TensorDict) -> None:
     obs = obs_td["history"][:, -1]
@@ -245,4 +251,4 @@ class MultiEncoderAE(nn.Module):
     ):
       if lo == hi:
         continue
-      self.goal_normalizers[name].update(obs_td[f"goal_{name}"][lo:hi])
+      self._goal_normalizer(name).update(obs_td[f"goal_{name}"][lo:hi])

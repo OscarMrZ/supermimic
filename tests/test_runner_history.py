@@ -1,6 +1,7 @@
 """Real-sim obs-history ring (BaseRunner): noised frames, shared-on-pad."""
 
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import MagicMock
 
 import torch
@@ -8,16 +9,17 @@ import torch
 from supermimic.runners.supermimic_runner import BaseRunner
 
 
-def _runner(history_length: int) -> SimpleNamespace:
+def _runner(history_length: int) -> BaseRunner:
   rep = MagicMock()
   rep.add_proprio_noise.side_effect = lambda x: x + torch.rand_like(x)
-  return SimpleNamespace(
+  runner = SimpleNamespace(
     cfg=SimpleNamespace(history_length=history_length),
     _representation=rep,
     _sim_history=None,
     device="cpu",
     env=MagicMock(),
   )
+  return cast(BaseRunner, runner)
 
 
 def test_seed_repeats_one_noised_frame():
@@ -26,6 +28,7 @@ def test_seed_repeats_one_noised_frame():
   runner.env.get_observations.return_value = {"actor": obs0}
   BaseRunner._seed_sim_history(runner)
   ring = runner._sim_history
+  assert ring is not None
   assert ring.shape == (8, 4, 5)
   # All seed slots share one noised realization (shared pad), and it is noised.
   assert torch.equal(ring[:, 0], ring[:, 3])
@@ -40,6 +43,7 @@ def test_advance_appends_noised_and_shares_on_done():
   dones[0] = True
   BaseRunner._advance_sim_history(runner, next_actor, dones)
   ring = runner._sim_history
+  assert ring is not None
   # Done rows collapse to one shared realization; live rows shift and append
   # the freshly-noised newest frame.
   assert torch.equal(ring[0, 0], ring[0, 3])

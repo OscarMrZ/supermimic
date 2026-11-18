@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
+
+from supermimic.motion_api import motion_command
 
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
@@ -145,7 +148,7 @@ class EncoderBiasSpec(SimContextSpec):
     params = event_cfg.params
     asset_cfg = params["asset_cfg"]
     self._asset_name = asset_cfg.name
-    self._joint_ids = env.command_manager.get_term("motion").joint_ids
+    self._joint_ids = motion_command(env).joint_ids
     self.dim = len(self._joint_ids)
     return [params["bias_range"]] * self.dim
 
@@ -156,7 +159,12 @@ class EncoderBiasSpec(SimContextSpec):
 
 
 class SimContext(nn.Module):
-  def __init__(self, specs: list[SimContextSpec], ranges: list[tuple[float, float]]):
+  mean: torch.Tensor
+  scale: torch.Tensor
+
+  def __init__(
+    self, specs: Sequence[SimContextSpec], ranges: list[tuple[float, float]]
+  ):
     super().__init__()
     self.specs = list(specs)
     stats = [_mean_scale(lo, hi) for lo, hi in ranges]
@@ -175,7 +183,7 @@ class SimContext(nn.Module):
       CoMOffsetSpec,
       EncoderBiasSpec,
     )
-    specs = [c() for c in candidates if c.name in env.cfg.events]
+    specs: list[SimContextSpec] = [c() for c in candidates if c.name in env.cfg.events]
     if not specs:
       raise RuntimeError(
         "No sim_ctx specs derived from env.cfg.events. "

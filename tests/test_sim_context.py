@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import pytest
 import torch
@@ -12,7 +13,12 @@ from supermimic.sim_context import (
   EncoderBiasSpec,
   FootFrictionSpec,
   SimContext,
+  SimContextSpec,
 )
+from tests.conftest import fake_env
+
+if TYPE_CHECKING:
+  from mjlab.envs import ManagerBasedRlEnv
 
 
 def _env(
@@ -22,8 +28,8 @@ def _env(
   sim_model=None,
   num_envs: int = 4,
   num_joints: int = 0,
-):
-  return SimpleNamespace(
+) -> ManagerBasedRlEnv:
+  return fake_env(
     cfg=SimpleNamespace(events=events or {}),
     scene=scene or {},
     command_manager=_command_manager(num_joints),
@@ -244,13 +250,16 @@ class TestEncoderBiasSpec:
     assert torch.equal(spec.read(env), bias)
 
 
-class _ConstSpec:
+class _ConstSpec(SimContextSpec):
   """Test-only spec: returns a fixed tensor, no env coupling."""
 
   def __init__(self, name, dim, value):
     self.name = name
     self.dim = dim
     self._value = value
+
+  def bind(self, env) -> list[tuple[float, float]]:
+    raise NotImplementedError
 
   def read(self, env) -> torch.Tensor:
     return torch.full((env.num_envs, self.dim), self._value)
@@ -311,7 +320,7 @@ def _full_env(*event_names: str, num_envs: int = 2):
     ),
   }
   events = {name: all_events[name] for name in event_names}
-  return SimpleNamespace(
+  return fake_env(
     cfg=SimpleNamespace(events=events),
     scene={"robot": asset},
     command_manager=_command_manager(3),

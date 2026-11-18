@@ -5,7 +5,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal, cast
 
 import torch
 import torch.nn as nn
@@ -26,6 +26,7 @@ from supermimic.learners.policy_learner import (
 )
 from supermimic.learners.wm_learner import WorldModelLearner, WorldModelLearnerCfg
 from supermimic.models import Dynamics, MultiEncoderAE, build_mlp
+from supermimic.motion_api import motion_command
 from supermimic.replay_buffer import FieldSpec, ReplayBuffer
 from supermimic.representations import StateRepresentation, create_representation
 from supermimic.runners.exporter import export_actor_as_onnx
@@ -97,7 +98,7 @@ class SuperMimicRunnerCfg(BaseRunnerCfg):
   distil from. The run starts from it and trains only the goal encoders it does
   not hold, on the motion-tracking reward: the rest of its actor and its world
   model stay as they are, and the critic keeps being fit."""
-  policy: BpttCfg | ActorCriticCfg = field(default_factory=ActorCriticCfg)
+  policy: BpttCfg | ActorCriticCfg = field(default_factory=ActorCriticPolicyLearnerCfg)
 
   sampling_mode: Literal["uniform", "adaptive", "start", "return"] = "return"
   """RSI reset distribution: 'return' (concentrate resets on the bins where the
@@ -153,7 +154,7 @@ def build_world_model(cfg: BaseRunnerCfg, env, device: str) -> WorldModel:
     f"[INFO] Sim Context: {sim_ctx_dim} dim ({[s.name for s in sim_context.specs]})"
   )
 
-  joint_ids = env.unwrapped.command_manager.get_term("motion").joint_ids
+  joint_ids = motion_command(env.unwrapped).joint_ids
   robot_data = env.unwrapped.scene["robot"].data
   default_joint_pos = robot_data.default_joint_pos[0, joint_ids].to(device)
   representation = create_representation(
@@ -236,7 +237,7 @@ def load_wandb_checkpoint(wandb_run_path: str, wm: WorldModel, device: str) -> N
 class Ratio:
   def __init__(self, ratio: float) -> None:
     self._ratio = ratio
-    self._prev: int | None = None
+    self._prev: float | None = None
 
   def __call__(self, step: int) -> int:
     step = int(step)
@@ -259,6 +260,8 @@ class BaseRunner[CfgT: BaseRunnerCfg]:
   setup, replay buffer, action manager, and logger. Subclasses implement
   ``_init_policy()`` for their specific policy setup.
   """
+
+  policy_learner: BpttPolicyLearner
 
   cfg: CfgT
 
@@ -299,7 +302,7 @@ class BaseRunner[CfgT: BaseRunnerCfg]:
       load_wandb_checkpoint(self.cfg.wandb_run_path, wm, self.device)
 
     self.action_manager = self.env.unwrapped.action_manager
-    self.motion_cmd = self.env.unwrapped.command_manager.get_term("motion")
+    self.motion_cmd = motion_command(self.env.unwrapped)
     self.motion = self.motion_cmd.motion
 
     self.replay_buffer = ReplayBuffer(
@@ -361,8 +364,8 @@ class BaseRunner[CfgT: BaseRunnerCfg]:
     input_dim: int,
     output_dim: int,
     hidden_dims: tuple[int, ...],
-    **kwargs: object,
-  ) -> nn.Module:
+    **kwargs: Any,
+  ) -> MLPModel:
     """Build an MLPModel with input obs normalization."""
     obs = TensorDict(
       {name: torch.zeros(1, input_dim, device=self.device)},
@@ -432,7 +435,7 @@ class BaseRunner[CfgT: BaseRunnerCfg]:
 
     When given, ``actor_td`` is queued for the actor-normalizer update.
     """
-    motion_cmd = self.env.unwrapped.command_manager.get_term("motion")
+    motion_cmd = motion_command(self.env.unwrapped)
     motion_times = motion_cmd.time_steps.clone()
 
     raw_actions = actions.detach().clone()
@@ -477,6 +480,11 @@ class BaseRunner[CfgT: BaseRunnerCfg]:
     self._update_actor_normalization(actor_inputs)
     self._pending_norm_updates.clear()
 
+  @property
+  def _actor(self) -> MultiEncoderAE:
+    """The policy learner's actor, which this runner builds as a MultiEncoderAE."""
+    return cast(MultiEncoderAE, self.policy_learner.actor)
+
   def _update_actor_normalization(self, actor_inputs: tuple[TensorDict, ...]) -> None:
     """Subclasses override to update the actor obs normalizer."""
     raise NotImplementedError
@@ -513,6 +521,7 @@ class BaseRunner[CfgT: BaseRunnerCfg]:
           name = name + ":latest"
         print(f"[INFO] Linking registry artifact: {name}")
         artifact = api.artifact(name)
+        assert wandb.run is not None  # wandb.init ran above
         wandb.run.use_artifact(artifact)
 
   def _cleanup(self) -> None:
@@ -605,7 +614,7 @@ class SuperMimicRunner(BaseRunner[SuperMimicRunnerCfg]):
     for normalizer in (
       *self._dynamics.normalizers(),
       actor.obs_normalizer,
-      *(actor.goal_normalizers[name] for name in kept),
+      *(actor._goal_normalizer(name) for name in kept),
     ):
       normalizer.until = 0
     print(f"[INFO] Training only the goal encoders {sorted(new)}")
@@ -710,9 +719,10 @@ class SuperMimicRunner(BaseRunner[SuperMimicRunnerCfg]):
     return self.env.num_envs
 
   def _update_actor_normalization(self, actor_inputs: tuple[TensorDict, ...]) -> None:
-    self.policy_learner.actor.train()
+    actor = self._actor
+    actor.train()
     for actor_td in actor_inputs:
-      self.policy_learner.actor.update_normalization(actor_td)
+      actor.update_normalization(actor_td)
 
   def run(self) -> None:
     log_dir = self._create_log_dir()
@@ -806,10 +816,10 @@ class SuperMimicRunner(BaseRunner[SuperMimicRunnerCfg]):
           and self.motion.time_step_total <= 15_000
         ):
           checkpoint_files += export_actor_as_onnx(
-            actor=self.policy_learner.actor,
+            actor=self._actor,
             env=self.env.unwrapped,
             path=str(log_dir),
-            run_name=wandb.run.name,
+            run_name=wandb.run.name or wandb.run.id,
             term_widths=self._representation.proprio_term_widths(self._num_actions),
           )
         # A disabled run has nowhere to log to, and would still stage a copy.

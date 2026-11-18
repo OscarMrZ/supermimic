@@ -39,11 +39,15 @@ ignore = ["B011"]
 pythonVersion = "3.13"
 venvPath = "."
 venv = ".venv"
-include = ["src"]
+include = ["src", "tests"]
+# torch does not list most of its functions (torch.cat, torch.exp, ...) as public
+# re-exports, so pyright flags every torch.* call; they are public API.
+reportPrivateImportUsage = false
 
 [dependency-groups]
 dev = [
     "ipdb>=0.13.13",
+    "onnxruntime>=1.19.0",
     "pre-commit>=4.2.0",
     "pyright>=1.1.408",
     "pytest>=9.0.2",

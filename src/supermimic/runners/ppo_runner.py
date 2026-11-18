@@ -54,7 +54,7 @@ class PpoRunner(BaseRunner[PpoRunnerCfg]):
       "actor",
       actor_input_dim,
       num_actions,
-      hidden_dims=self.cfg.actor_hidden_dims,
+      hidden_dims=tuple(self.cfg.actor_hidden_dims),
       activation=self.cfg.activation,
       distribution_cfg={
         "class_name": "rsl_rl.modules.distribution.GaussianDistribution",
@@ -65,7 +65,7 @@ class PpoRunner(BaseRunner[PpoRunnerCfg]):
       "critic",
       critic_input_dim,
       1,
-      hidden_dims=self.cfg.critic_hidden_dims,
+      hidden_dims=tuple(self.cfg.critic_hidden_dims),
       activation=self.cfg.activation,
     )
 

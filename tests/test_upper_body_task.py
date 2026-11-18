@@ -4,17 +4,22 @@ from __future__ import annotations
 
 import math
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import mujoco
 import numpy as np
 import torch
 
+from supermimic.motion_api import motion_command
 from supermimic.tasks.task_spec import (
   UpperBodyTaskCfg,
   make_upper_body_task,
   reference_com_feet_distance,
 )
-from tests.conftest import identity_aux
+from tests.conftest import fake_env, identity_aux
+
+if TYPE_CHECKING:
+  from mjlab.envs import ManagerBasedRlEnv
 
 _XML = """
 <mujoco>
@@ -55,7 +60,7 @@ _NUM_UPPER = 2  # pelvis_1_joint, arm_left_1_joint
 _FRAME_DIM = 11 + 2 * _NUM_UPPER
 
 
-def _make_env(seed: int = 0) -> SimpleNamespace:
+def _make_env(seed: int = 0) -> ManagerBasedRlEnv:
   """A two-legged robot and one random clip of it, as the task reads them."""
   model = mujoco.MjModel.from_xml_string(_XML)
   gen = torch.Generator().manual_seed(seed)
@@ -82,7 +87,7 @@ def _make_env(seed: int = 0) -> SimpleNamespace:
   motion_cmd = SimpleNamespace(
     robot=robot, motion=motion, full_joint_state=lambda pos, vel: (pos, vel)
   )
-  return SimpleNamespace(
+  return fake_env(
     command_manager=SimpleNamespace(get_term=lambda name: motion_cmd),
     sim=SimpleNamespace(mj_model=model),
   )
@@ -90,7 +95,7 @@ def _make_env(seed: int = 0) -> SimpleNamespace:
 
 def test_com_feet_distance_matches_mujoco():
   env = _make_env()
-  motion_cmd, model = env.command_manager.get_term("motion"), env.sim.mj_model
+  motion_cmd, model = motion_command(env), env.sim.mj_model
   feet = ("leg_left_5_link", "leg_right_5_link")
 
   distance = reference_com_feet_distance(motion_cmd, model, feet, chunk=4)
@@ -111,7 +116,7 @@ def test_com_feet_distance_matches_mujoco():
 
 def test_command_holds_the_wbc_terms_in_order():
   env = _make_env()
-  motion = env.command_manager.get_term("motion").motion
+  motion = motion_command(env).motion
   # Frame 2: the reference faces +y, moves along world +x and leans nowhere.
   yaw = math.pi / 2
   motion.root_quat_w[2] = torch.tensor([math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)])
@@ -131,15 +136,13 @@ def test_command_holds_the_wbc_terms_in_order():
   assert torch.equal(goal[10:12], motion.joint_pos[2, :2])
   assert torch.equal(goal[12:14], motion.joint_vel[2, :2])
   feet = UpperBodyTaskCfg().feet_body_names
-  distance = reference_com_feet_distance(
-    env.command_manager.get_term("motion"), env.sim.mj_model, feet
-  )
+  distance = reference_com_feet_distance(motion_command(env), env.sim.mj_model, feet)
   assert torch.isclose(goal[14], distance[2])
 
 
 def test_command_does_not_depend_on_the_robot():
   env = _make_env()
-  motion = env.command_manager.get_term("motion").motion
+  motion = motion_command(env).motion
   task = make_upper_body_task(UpperBodyTaskCfg(), env)
   times = torch.tensor([1, 4])
   turned = identity_aux(2)
@@ -153,7 +156,7 @@ def test_command_does_not_depend_on_the_robot():
 
 def test_goal_frames_and_stride_widen_the_command():
   env = _make_env()
-  motion = env.command_manager.get_term("motion").motion
+  motion = motion_command(env).motion
   single = make_upper_body_task(UpperBodyTaskCfg(), env)
   window = make_upper_body_task(UpperBodyTaskCfg(goal_frames=3, goal_stride=2), env)
 
@@ -161,6 +164,9 @@ def test_goal_frames_and_stride_widen_the_command():
 
   # Frames 3, 5 and 7, the last one held at the clip's final frame, 5.
   assert window.goal_dim == goal.shape[1] == 3 * _FRAME_DIM
-  frames = single.extract_training_goal(motion, torch.tensor([3, 5, 5]), None)
+  frames = single.extract_training_goal(
+    motion, torch.tensor([3, 5, 5]), identity_aux(3)
+  )
   assert torch.equal(goal[0], frames.flatten())
+  assert window.precompute_replay_goal is not None
   assert torch.equal(window.precompute_replay_goal(motion)[3], goal[0])

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import cast
 
 import torch
 import torch.nn as nn
 from tensordict import TensorDict
+from tensordict import stack as td_stack
 
 from supermimic.envs.world_model_env import WorldModelEnv
 from supermimic.learners.learner_utils import (
@@ -94,7 +96,7 @@ class BpttPolicyLearner:
       module.eval()
       module.requires_grad_(False)
     starts = [self.wm_env.sample_initial_states() for _ in range(self.cfg.num_batches)]
-    return self._captured_update(torch.stack(starts))
+    return self._captured_update(td_stack(starts))
 
   def _update_from(self, starts: TensorDict) -> dict[str, torch.Tensor]:
     totals: dict[str, torch.Tensor] = {}
@@ -109,7 +111,12 @@ class BpttPolicyLearner:
     """Imagine one rollout from ``start`` and take one actor step on its return."""
     cfg = self.cfg
     obs = self.wm_env.reset(start)
-    ret, aux_loss, survival = 0.0, 0.0, 1.0
+    # The start batch carries no device of its own; the imagined obs do.
+    critic_obs = cast(torch.Tensor, obs["critic"])
+    ret = torch.zeros(critic_obs.shape[0], device=critic_obs.device)
+    aux_loss = torch.zeros_like(ret)
+    survival = torch.ones_like(ret)
+    term_prob = torch.zeros_like(ret)
     rollout: list[TensorDict] = []
     for t in range(cfg.horizon):
       actions = self._rollout_actor(obs)
@@ -126,6 +133,7 @@ class BpttPolicyLearner:
     grad_norm = _optimize_step(
       self.actor_optimizers, loss, self.actor_params, 1.0, cfg.grad_clip_value
     )
+    assert grad_norm is not None  # max_norm is set
     return {
       "return": ret.mean().detach(),
       "grad_norm": grad_norm,
@@ -167,6 +175,7 @@ class ActorCriticPolicyLearner(BpttPolicyLearner):
     trainable: Sequence[nn.Module] | None = None,
   ):
     super().__init__(policy, wm_env, cfg, device, trainable)
+    self._lam = cfg.lam
     self.critic = critic
     self.critic_optimizers = build_optimizers([critic], self.cfg.lr, device=device)
     self._v_max = self.wm_env.max_step_reward / (1 - self.cfg.gamma)
@@ -182,19 +191,20 @@ class ActorCriticPolicyLearner(BpttPolicyLearner):
   def _fit_critic(
     self, rollout: list[TensorDict], last_obs: TensorDict
   ) -> dict[str, torch.Tensor]:
-    steps = torch.stack(rollout)
+    steps = td_stack(rollout)
+    critic_obs = cast(torch.Tensor, steps["critic"])
     with torch.no_grad():
-      values = self.critic(steps["critic"])
+      values = self.critic(critic_obs)
       last_value = self.critic(last_obs["critic"])
     returns = gae_returns(
       values,
       last_value,
-      steps["reward"].unsqueeze(-1),
-      steps["done"].unsqueeze(-1),
+      cast(torch.Tensor, steps["reward"]).unsqueeze(-1),
+      cast(torch.Tensor, steps["done"]).unsqueeze(-1),
       self.cfg.gamma,
-      self.cfg.lam,
+      self._lam,
     ).clamp(max=self._v_max)
-    obs, returns = steps["critic"].flatten(0, 1), returns.flatten(0, 1)
+    obs, returns = critic_obs.flatten(0, 1), returns.flatten(0, 1)
     perm = torch.randperm(len(returns) // 4 * 4, device=returns.device)
     self.critic.requires_grad_(True)
     losses = []

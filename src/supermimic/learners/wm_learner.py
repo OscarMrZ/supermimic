@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from tensordict import TensorDict
+from tensordict import stack as td_stack
 
 from supermimic.learners.learner_utils import (
   CapturedUpdate,
@@ -102,7 +103,7 @@ class WorldModelLearner:
     self.dynamics.train()
     for p in self._all_params:
       p.requires_grad_(True)
-    batches = torch.stack([td.select("state", "action", "sim_ctx") for td in data])
+    batches = td_stack([td.select("state", "action", "sim_ctx") for td in data])
     return self._captured_update(batches)
 
   def _update_from(self, batches: TensorDict) -> dict[str, torch.Tensor]:

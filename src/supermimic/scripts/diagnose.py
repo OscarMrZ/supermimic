@@ -14,10 +14,12 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 import mjlab
 import torch
 import tyro
+from mjlab.envs.mdp.actions.actions import BaseAction
 from mjlab.tasks.registry import list_tasks, load_env_cfg
 from mjlab.utils.lab_api.math import quat_apply_inverse
 from tensordict import TensorDict
@@ -25,6 +27,7 @@ from tensordict import TensorDict
 import supermimic.tasks  # noqa: F401
 from supermimic.envs.multi_task_world_model_env import MultiTaskWorldModelEnv
 from supermimic.models import build_mlp
+from supermimic.motion_api import motion_command, set_motion_source
 from supermimic.representations import PROPRIO_NOISE_HALF_WIDTHS, set_goal_window
 from supermimic.runners.supermimic_runner import (
   SuperMimicRunnerCfg,
@@ -51,7 +54,7 @@ class DiagnoseConfig:
   device: str | None = None
 
 
-def row(name: str, *values: float) -> None:
+def row(name: str, *values: float | torch.Tensor) -> None:
   print(f"  {name:<28}" + "".join(f"{float(v):>11.4f}" for v in values))
 
 
@@ -59,7 +62,7 @@ def row(name: str, *values: float) -> None:
 def diagnose(task_id: str, cfg: DiagnoseConfig) -> None:
   device, rc = setup_device(cfg.device), cfg.runner
   env_cfg = load_env_cfg(task_id, play=True)
-  env_cfg.commands["motion"].motion_file = [os.path.expanduser(cfg.motion_file)]
+  set_motion_source(env_cfg, [os.path.expanduser(cfg.motion_file)])
   set_goal_window(rc.goal_frames, rc.goal_stride)
   env = create_env(env_cfg, cfg.num_envs, device)
   base = env.unwrapped
@@ -79,7 +82,7 @@ def diagnose(task_id: str, cfg: DiagnoseConfig) -> None:
   for module in (dyn, actor, critic):
     module.eval()
 
-  cmd = base.command_manager.get_term("motion")
+  cmd = motion_command(base)
   motion, goal_of = cmd.motion, actor.task_specs[0].extract_training_goal
   sim_ctx = wm.sim_context.read(base)
 
@@ -135,7 +138,9 @@ def diagnose(task_id: str, cfg: DiagnoseConfig) -> None:
   aux_all = rep.extract_aux_state(R["state"])
   names = [base.scene["robot"].joint_names[i] for i in cmd.joint_ids.tolist()]
   legs = [i for i, n in enumerate(names) if n.startswith("leg_")]
-  action_names = base.action_manager.get_term("joint_pos").target_names
+  action_names = cast(
+    BaseAction, base.action_manager.get_term("joint_pos")
+  ).target_names
   leg_actions = [action_names.index(names[i]) for i in legs]
 
   moving, still = speed > WALK, speed < STILL
@@ -212,7 +217,9 @@ def diagnose(task_id: str, cfg: DiagnoseConfig) -> None:
   def imagine(batch: TensorDict, t0: torch.Tensor, e: torch.Tensor, closed: bool):
     """Roll the world model H steps on the recorded actions, or on the actor's."""
     wm_env.num_envs = len(t0)
-    obs, alive, total, states = wm_env.reset(batch), 1.0, 0.0, []
+    obs, states = wm_env.reset(batch), []
+    alive = torch.ones(len(t0), device=device)
+    total = torch.zeros_like(alive)
     for k in range(H):
       action = actor(obs) if closed else R["action"][t0 + k, e]
       obs, reward, term_prob, _ = wm_env.step(action)
@@ -350,7 +357,8 @@ def diagnose(task_id: str, cfg: DiagnoseConfig) -> None:
     t0, e = sample(inside & kind_mask & outcome["normal"])
     wm_env.num_envs = len(t0)
     obs = wm_env.reset(batch_at(t0, e)[0])
-    start_value, alive, total = value(obs["critic"]), 1.0, 0.0
+    start_value = value(obs["critic"])
+    alive, total = torch.ones_like(start_value), torch.zeros_like(start_value)
     rewards, alives = [], []
     for k in range(long):
       obs, reward, term_prob, _ = wm_env.step(actor(obs))

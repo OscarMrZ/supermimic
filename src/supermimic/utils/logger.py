@@ -3,6 +3,7 @@ from __future__ import annotations
 import statistics
 import time
 from collections import deque
+from collections.abc import Mapping
 
 import torch
 import wandb
@@ -152,7 +153,7 @@ class Logger:
     collect_time: float,
     wm_learn_time: float,
     policy_learn_time: float,
-    loss_dict: dict[str, float | torch.Tensor],
+    loss_dict: Mapping[str, float | torch.Tensor],
     num_collected_steps: int,
     width: int = 80,
     pad: int = 40,
@@ -164,10 +165,9 @@ class Logger:
 
     extras = self._episode_extras()
     # Device stats reach the host in one transfer.
-    on_device = [k for k, v in loss_dict.items() if isinstance(v, torch.Tensor)]
-    values = (
-      torch.stack([loss_dict[k] for k in on_device]).tolist() if on_device else []
-    )
+    tensors = {k: v for k, v in loss_dict.items() if isinstance(v, torch.Tensor)}
+    on_device = list(tensors)
+    values = torch.stack(list(tensors.values())).tolist() if tensors else []
     losses = {**loss_dict, **dict(zip(on_device, values, strict=True))}
     row = losses | {
       "Perf/total_fps": fps,

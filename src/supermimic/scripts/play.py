@@ -15,10 +15,11 @@ import tyro
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import list_tasks, load_env_cfg
-from mjlab.tasks.tracking.mdp import MotionCommandCfg
 from mjlab.utils.torch import configure_torch_backends
+from pal_mjlab.tasks.WBC.mdp.commands import OnlineMotionCommandCfg
 
 import supermimic.tasks  # noqa: F401
+from supermimic.motion_api import motion_command, motion_command_cfg, set_motion_source
 from supermimic.representations import set_goal_window
 from supermimic.runners.run_config import check_representation_matches, load_runner_cfg
 from supermimic.runners.supermimic_runner import (
@@ -79,8 +80,7 @@ def play(task_id: str, cfg: PlayConfig) -> None:
   check_representation_matches(task_id, runner_cfg.representation)
   set_goal_window(runner_cfg.goal_frames, runner_cfg.goal_stride)
 
-  command_term = env_cfg.commands["motion"]
-  assert isinstance(command_term, MotionCommandCfg)
+  csv_motions = isinstance(motion_command_cfg(env_cfg), OnlineMotionCommandCfg)
   motion_names: list[str] = []
   if cfg.motion_file is not None:
     expanded = os.path.expanduser(cfg.motion_file)
@@ -90,9 +90,11 @@ def play(task_id: str, cfg: PlayConfig) -> None:
       files = [expanded]
     if not files:
       raise ValueError(f"No motion files matched: {cfg.motion_file}")
-    command_term.motion_file = files
+    set_motion_source(env_cfg, files)
     motion_names = [Path(f).stem for f in files]
-    if len(files) == 1 and os.path.isdir(files[0]):  # a packed directory
+    if csv_motions:  # a CSV folder: the clip names come from the loaded library
+      motion_names = []
+    elif len(files) == 1 and os.path.isdir(files[0]):  # a packed directory
       with open(os.path.join(files[0], "motion_names.json")) as fh:
         motion_names = json.load(fh)
     print(f"[INFO] Using {len(files)} local motion(s)")
@@ -101,13 +103,15 @@ def play(task_id: str, cfg: PlayConfig) -> None:
     for artifact in motion_artifacts:
       print(f"[INFO] Found linked motion artifact: {artifact.name}")
       motion_files.append(str(download_artifact_cached(artifact) / "motion.npz"))
-    command_term.motion_file = (
-      motion_files if len(motion_files) > 1 else motion_files[0]
+    set_motion_source(
+      env_cfg, motion_files if len(motion_files) > 1 else motion_files[0]
     )
     motion_names = [a.name.split(":")[0] for a in motion_artifacts]
     print(f"[INFO] Loaded {len(motion_files)} motion(s)")
 
   env = RslRlVecEnvWrapper(ManagerBasedRlEnv(cfg=env_cfg, device=device))
+  if csv_motions:
+    motion_names = list(motion_command(env.unwrapped).motion.motion_names)
 
   wm = build_world_model(runner_cfg, env, device)
   representation = wm.representation

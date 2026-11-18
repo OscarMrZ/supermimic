@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from typing import cast
+from unittest.mock import MagicMock
+
 import torch
 
 from supermimic.envs.multi_task_world_model_env import MultiTaskWorldModelEnv
@@ -16,6 +19,7 @@ from tests.conftest import (
   ACTION_DIM,
   MOTION_GOAL_DIM,
   VELOCITY_GOAL_DIM,
+  grad_of,
   identity_aux,
   make_mock_buffer,
   make_mock_command_env,
@@ -120,11 +124,15 @@ class TestHistoryRing:
     """Warm-start predecessors are noised; clamp-padded slots (before the
     episode start) share ONE noise realization, as the collection ring does."""
     env = _make_env(history_length=self.H)
-    env.representation.add_proprio_noise.side_effect = lambda x: x + torch.rand_like(x)
+    noise = cast(MagicMock, env.representation.add_proprio_noise)
+    noise.side_effect = lambda x: x + torch.rand_like(x)
     window, padded = make_mock_buffer().sample_causal(self.H, BATCH)
     clean = window["actor_obs"]  # frame k holds k
     padded[:, :2] = True  # slots 0,1 clamp-pad; slot 2 is the oldest real frame
-    env.replay_buffer.sample_causal = lambda length, batch: (window, padded)
+    cast(MagicMock, env.replay_buffer).sample_causal = lambda length, batch: (
+      window,
+      padded,
+    )
 
     history = env.reset()["history"]
     # The padded slots carry the SAME noised realization of the oldest real frame.
@@ -148,7 +156,8 @@ class TestHistoryRing:
     env = _make_env(history_length=self.H)
     env.reset()
     D = env._latest_sensor.shape[-1]
-    env.representation.compute_actor_sensor.side_effect = lambda rs, ctx, **kw: (
+    sensor = cast(MagicMock, env.representation.compute_actor_sensor)
+    sensor.side_effect = lambda rs, ctx, **kw: (
       kw["last_action"].sum(-1, keepdim=True).expand(-1, D) * 2.0
     )
 
@@ -158,7 +167,7 @@ class TestHistoryRing:
 
     obs["history"][:, -2].sum().backward()
     assert a1.grad is not None
-    assert torch.allclose(a1.grad, torch.full_like(a1, 2.0 * D))
+    assert torch.allclose(grad_of(a1), torch.full_like(a1, 2.0 * D))
 
 
 class TestRepresentationApiContract:

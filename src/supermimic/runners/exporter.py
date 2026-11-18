@@ -26,9 +26,9 @@ import torch
 import torch.nn as nn
 from mjlab.envs import ManagerBasedRlEnv
 from mjlab.rl.exporter_utils import attach_metadata_to_onnx, get_base_metadata
-from mjlab.tasks.tracking.mdp import MotionCommand
 
 from supermimic.models import MultiEncoderAE
+from supermimic.motion_api import motion_command
 from supermimic.representations import term_major_to_temporal
 
 
@@ -132,6 +132,14 @@ class _MotionDeployWrapper(nn.Module):
   part of ``obs``.
   """
 
+  _command_table: torch.Tensor
+  _joint_pos: torch.Tensor
+  _joint_vel: torch.Tensor
+  _body_pos_w: torch.Tensor
+  _body_quat_w: torch.Tensor
+  _body_lin_vel_w: torch.Tensor
+  _body_ang_vel_w: torch.Tensor
+
   def __init__(
     self,
     actor: MultiEncoderAE,
@@ -148,10 +156,10 @@ class _MotionDeployWrapper(nn.Module):
     self.obs_input_size = (
       self.actor.hist_size if self._has_command else self.actor.input_size
     )
-    if self._has_command:
+    if command_table is not None:
       self.register_buffer("_command_table", command_table.detach().cpu())
 
-    motion = cast(MotionCommand, env.command_manager.get_term("motion")).motion
+    motion = motion_command(env).motion
     frames = torch.arange(motion.time_step_total, device=motion.joint_pos.device)
     body_pos_w, body_quat_w, body_lin_vel_w, body_ang_vel_w = motion.body_state(frames)
     self.register_buffer("_joint_pos", motion.joint_pos.detach().cpu())
@@ -190,7 +198,7 @@ class _MotionDeployWrapper(nn.Module):
 
 def _tracking_metadata(env: ManagerBasedRlEnv, run_name: str) -> dict:
   """Base metadata + the mjlab tracking deploy fields (anchor + body names)."""
-  motion_term = cast(MotionCommand, env.command_manager.get_term("motion"))
+  motion_term = motion_command(env)
   metadata = get_base_metadata(env, run_name)
   metadata["anchor_body_name"] = motion_term.cfg.anchor_body_name
   metadata["body_names"] = list(motion_term.cfg.body_names)
@@ -223,7 +231,7 @@ def _export_motion(
   wrapper = _MotionDeployWrapper(actor, env, "motion", term_widths)
   onnx_path = _export_motion_graph(wrapper, path, filename)
   metadata = _tracking_metadata(env, run_name)
-  actor_terms = list(metadata["observation_names"])
+  actor_terms = list(cast(list[str], metadata["observation_names"]))
   actor_goal_names = [
     n
     for n in env.observation_manager.active_terms["goal"]
@@ -247,7 +255,7 @@ def _export_velocity_replay(
   velocity_task = next((ts for ts in actor.task_specs if ts.name == "velocity"), None)
   if velocity_task is None or velocity_task.precompute_replay_goal is None:
     return None
-  motion = cast(MotionCommand, env.command_manager.get_term("motion")).motion
+  motion = motion_command(env).motion
   command_table = velocity_task.precompute_replay_goal(motion)
   wrapper = _MotionDeployWrapper(actor, env, "velocity", term_widths, command_table)
   onnx_path = _export_motion_graph(wrapper, path, filename)
@@ -277,7 +285,7 @@ def _export_velocity(
     filename,
   )
   metadata = get_base_metadata(env, run_name)
-  actor_terms = list(metadata["observation_names"])
+  actor_terms = list(cast(list[str], metadata["observation_names"]))
   metadata["observation_names"] = actor_terms + ["command"]
   metadata["command_names"] = ["twist"]
   metadata["observation_history_lengths"] = [actor.history_length] * len(

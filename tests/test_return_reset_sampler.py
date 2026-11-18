@@ -32,6 +32,7 @@ def test_unmeasured_bins_read_v_max_and_sampling_starts_uniform() -> None:
   s = _sampler(horizon=1)
   assert torch.equal(s.value, torch.full((4,), 100.0))
   w = _step(s, 25, 1.0)  # bin 2 is measured at v_max: nothing is hard yet
+  assert w is not None
   assert torch.allclose(w, torch.full((4,), 0.25))
 
 
@@ -40,6 +41,7 @@ def test_record_returns_a_distribution_every_horizon_steps() -> None:
   assert _step(s, 5, 1.0) is None
   assert _step(s, 6, 1.0) is None
   w = _step(s, 7, 1.0)
+  assert w is not None
   assert w is not None and abs(float(w.sum()) - 1.0) < 1e-6
 
 
@@ -98,6 +100,7 @@ def test_focus_concentrates_on_low_return() -> None:
   s = _sampler(horizon=1, explore=0.0, keep=0.0)
   s.value[1] = 70.0
   w = _step(s, 25, 1.0)  # bin 2 measured at v_max
+  assert w is not None
   assert abs(float(w[1] / w[0]) - math.exp(25 * 0.3)) / math.exp(7.5) < 1e-3
 
 
@@ -108,6 +111,7 @@ def test_keep_holds_a_solved_hard_part_of_a_long_clip() -> None:
   _step(s, 600, 1.0)  # the focus takes bins 10-11 and earns keep
   s.value[10:12] = 100.0
   w = _step(s, 600, 1.0)
+  assert w is not None
   explore_and_focus = 0.5 / 64 + 0.4 / 64
   assert abs(float(w.sum()) - 1.0) < 1e-6
   assert float(w[10:12].sum()) - 2 * explore_and_focus > 0.09  # the keep stays there
@@ -119,8 +123,10 @@ def test_focus_spread_thin_earns_almost_no_keep() -> None:
   s.value[7] = 0.0
   _step(s, 9000, 1.0)
   s.value[7] = 100.0
+  w = None
   for _ in range(50):  # then 50 updates of uniform focus
     w = _step(s, 9000, 1.0)
+  assert w is not None
   # Each uniform update earns 1000 * (1/1000)**2 = 1/1000 in total, against about 1
   # for bin 7.
   assert float(s.effort.sum() - s.effort[7]) < 0.06

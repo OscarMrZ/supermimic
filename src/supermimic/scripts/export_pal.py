@@ -38,7 +38,7 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import mjlab.tasks  # noqa: F401
 import numpy as np
@@ -48,6 +48,7 @@ import torch
 import torch.nn as nn
 import tyro
 from mjlab.envs import ManagerBasedRlEnv
+from mjlab.envs.mdp.actions.actions import BaseAction
 from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.tasks.registry import load_env_cfg
 from mjlab.utils.lab_api.math import matrix_from_quat
@@ -55,6 +56,7 @@ from mjlab.utils.os import dump_yaml
 
 import supermimic.tasks  # noqa: F401
 from supermimic import representations
+from supermimic.motion_api import motion_command, set_motion_source
 from supermimic.runners.exporter import _export_onnx, _SingleEncoderOnnx
 from supermimic.runners.run_config import check_representation_matches
 from supermimic.runners.supermimic_runner import (
@@ -129,6 +131,8 @@ def controller_index(proprio_dim: int, num_joints: int) -> torch.Tensor:
 
 class PalOnnx(nn.Module):
   """One encoder and the decoder, on the pal_policy_controller observation."""
+
+  _index: torch.Tensor
 
   def __init__(
     self, actor, encoder: str, term_widths: list[int], num_joints: int
@@ -211,7 +215,7 @@ def goal_metadata(env: ManagerBasedRlEnv, cfg: ExportConfig) -> dict[str, str]:
   if cfg.encoder == "velocity":
     return {"goal_dim": "3"}
 
-  motion = env.command_manager.get_term("motion")
+  motion = motion_command(env)
   joints = list(motion.motion.fk.joint_names)
   frames, stride = representations.NUM_GOAL_FRAMES, representations.GOAL_FRAME_STRIDE
   frame_size = 2 * len(joints) + ROT6D
@@ -244,14 +248,14 @@ def pal_metadata(
     "asset_cfg"
   ]
   observed_joints = [robot.joint_names[i] for i in observed.joint_ids]
-  motion = env.command_manager.get_term("motion")
+  motion = motion_command(env)
   goal_joints = [robot.joint_names[i] for i in motion.joint_ids.tolist()]
   if goal_joints != observed_joints:
     raise ValueError(
       f"Goal joints {goal_joints} are not the observed ones {observed_joints}"
     )
 
-  action = env.action_manager.get_term("joint_pos")
+  action = cast(BaseAction, env.action_manager.get_term("joint_pos"))
   action_joints = list(action._target_names)
   ctrl_of_joint = {a.target.split("/")[-1]: a.id for a in robot.spec.actuators}
   ctrl = [ctrl_of_joint[j] for j in action_joints]
@@ -333,7 +337,7 @@ def main(cfg: ExportConfig) -> None:
   representations.set_goal_window(cfg.runner.goal_frames, cfg.runner.goal_stride)
   env_cfg = load_env_cfg(cfg.task_id, play=True)
   env_cfg.scene.num_envs = 1
-  env_cfg.commands["motion"].motion_file = os.path.expanduser(cfg.motion_file)
+  set_motion_source(env_cfg, os.path.expanduser(cfg.motion_file))
   env = RslRlVecEnvWrapper(ManagerBasedRlEnv(cfg=env_cfg, device=device))
 
   checkpoint = Path(os.path.expanduser(cfg.checkpoint_dir))
@@ -344,7 +348,7 @@ def main(cfg: ExportConfig) -> None:
   actor.eval()
   if cfg.encoder not in actor.encoders:
     raise ValueError(f"The run has no '{cfg.encoder}' encoder: {list(actor.encoders)}")
-  if int(actor.goal_normalizers[cfg.encoder].count) == 0:
+  if int(actor._goal_normalizer(cfg.encoder).count) == 0:
     raise ValueError(f"The '{cfg.encoder}' encoder of the run was never trained")
 
   num_joints = wm.representation.num_joints

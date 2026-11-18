@@ -17,11 +17,12 @@ single-actor policy and the multi-encoder actor, and may override
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 from tensordict import TensorDict
 
+from supermimic.motion_api import motion_command
 from supermimic.replay_buffer import ReplayBuffer
 
 if TYPE_CHECKING:
@@ -43,7 +44,7 @@ class WorldModelEnv(ABC):
     representation: StateRepresentation,
     env: Any,
     batch_size: int,
-    replay_buffer: ReplayBuffer,
+    replay_buffer: ReplayBuffer | None,
     history_length: int,
     termination_softness: float,
     device: str = "cpu",
@@ -62,7 +63,7 @@ class WorldModelEnv(ABC):
 
     # Reference-motion buffers.
     self._num_actions = env.num_actions
-    motion_cmd = env.unwrapped.command_manager.get_term("motion")
+    motion_cmd = motion_command(env.unwrapped)
     self.motion = motion_cmd.motion
     self._anchor_index = motion_cmd.motion_anchor_body_index
 
@@ -278,12 +279,14 @@ class WorldModelEnv(ABC):
     ``sensor_window`` holds the H sensor frames ending at the init state, and
     ``pad_mask`` flags its clamp-padded slots.
     """
+    if self.replay_buffer is None:
+      raise RuntimeError("this world-model env has no replay buffer to sample from")
     if self.history_length == 1:
       return self.replay_buffer.sample(1, self.num_envs).squeeze(1)
     window, padded = self.replay_buffer.sample_causal(
       self.history_length, self.num_envs
     )
-    batch = window[:, -1]
+    batch = cast(TensorDict, window[:, -1])
     batch["sensor_window"] = window["actor_obs"]
     batch["pad_mask"] = padded
     return batch

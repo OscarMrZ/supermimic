@@ -32,7 +32,7 @@ class MultiTaskWorldModelEnv(WorldModelEnv):
     representation: StateRepresentation,
     env: Any,
     batch_size: int,
-    replay_buffer: ReplayBuffer,
+    replay_buffer: ReplayBuffer | None,
     task_specs: list[TaskSpec],
     history_length: int,
     termination_softness: float,

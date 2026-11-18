@@ -19,12 +19,13 @@ from mjlab.utils.forward_kinematics import ForwardKinematics
 from mjlab.utils.lab_api.math import quat_apply, quat_apply_inverse
 from tensordict import TensorDict
 
+from supermimic.motion_api import motion_command
 from supermimic.representations import actor_goal_dim, goal_window_indices
 
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
-  from mjlab.tasks.tracking.mdp.commands import MotionCommand, MotionLoader
 
+  from supermimic.motion_api import MotionCommandLike, MotionLibrary
   from supermimic.representations import StateRepresentation
 
 
@@ -51,9 +52,11 @@ class DiscreteGoalSpec:
 type GoalSpec = ContinuousGoalSpec | DiscreteGoalSpec
 
 
-ExtractFromMotion = Callable[["MotionLoader", torch.Tensor, torch.Tensor], torch.Tensor]
+ExtractFromMotion = Callable[
+  ["MotionLibrary", torch.Tensor, torch.Tensor], torch.Tensor
+]
 BuildInferenceGoalObs = Callable[[torch.Tensor], torch.Tensor]
-PrecomputeReplayGoal = Callable[["MotionLoader"], torch.Tensor]
+PrecomputeReplayGoal = Callable[["MotionLibrary"], torch.Tensor]
 
 
 @dataclass(frozen=True)
@@ -182,7 +185,7 @@ def make_velocity_task(
 
 
 def reference_com_feet_distance(
-  motion_cmd: "MotionCommand",
+  motion_cmd: "MotionCommandLike",
   mj_model: mujoco.MjModel,
   feet_body_names: tuple[str, ...],
   chunk: int = 65536,
@@ -237,7 +240,7 @@ def make_upper_body_task(cfg: "UpperBodyTaskCfg", env: "ManagerBasedRlEnv") -> T
   the motion alone and holds neither a heading nor a leg joint. The legs are left
   to the policy, which still earns the tracking reward of the whole body.
   """
-  motion_cmd = env.command_manager.get_term("motion")
+  motion_cmd = motion_command(env)
   joint_names = motion_cmd.motion.fk.joint_names
   device = motion_cmd.motion.joint_pos.device
   upper = torch.tensor(

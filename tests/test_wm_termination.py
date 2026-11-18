@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,6 +14,7 @@ from tests.conftest import (
   ANCHOR_BODY_INDEX,
   ANCHOR_ORI_THRESHOLD,
   ANCHOR_POS_THRESHOLD,
+  grad_of,
   identity_aux,
   make_mock_buffer,
   make_mock_command_env,
@@ -41,10 +43,18 @@ def _make_env(softness: float = SOFTNESS) -> MotionTrackingEnv:
   )
 
 
+def _reference_state(
+  env: MotionTrackingEnv,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+  """The reference bodies at rest: ``_reference`` with zero velocities."""
+  pos, quat = _reference(env)
+  return pos, quat, torch.zeros_like(pos), torch.zeros_like(pos)
+
+
 def _reference(env: MotionTrackingEnv) -> tuple[torch.Tensor, torch.Tensor]:
   """The anchor rolled by REF_TILT at REF_Z, every other body elsewhere so a
   rule reading the wrong body index cannot pass."""
-  num_bodies = env.representation.num_bodies
+  num_bodies = cast(int, env.representation.num_bodies)  # the mock holds an int
   pos = (torch.arange(num_bodies, dtype=torch.float).view(-1, 1) * 0.5).repeat(1, 3)
   quat = torch.zeros(num_bodies, 4)
   quat[:, 0] = 1.0
@@ -116,7 +126,7 @@ class TestSoftTermination:
   def test_step_scores_the_post_step_pose(self):
     env = _make_env()
     env.reset()
-    env._ref_body_state = (*_reference(env), None, None)
+    env._ref_body_state = _reference_state(env)
     env.aux_state = _aux()
     env.dynamics = MagicMock(
       return_value=(_aux(z_offset=2 * ANCHOR_POS_THRESHOLD), env.rep_state)
@@ -127,12 +137,12 @@ class TestSoftTermination:
   def test_termination_keeps_the_gradient_to_the_predicted_pose(self):
     env = _make_env()
     env.reset()
-    env._ref_body_state = (*_reference(env), None, None)
+    env._ref_body_state = _reference_state(env)
     aux = _aux(z_offset=ANCHOR_POS_THRESHOLD).requires_grad_(True)
     env.dynamics = MagicMock(return_value=(aux, env.rep_state))
     _, _, term_prob, _ = env.step(torch.zeros(BATCH, env.num_actions))
     term_prob.sum().backward()
-    assert (aux.grad[:, 2].abs() > 0).all()
+    assert (grad_of(aux)[:, 2].abs() > 0).all()
 
   def test_non_positive_softness_is_rejected(self):
     with pytest.raises(ValueError, match="termination_softness"):

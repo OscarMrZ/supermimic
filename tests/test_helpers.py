@@ -8,6 +8,7 @@ from supermimic.utils.helpers import (
   quat_to_rot6d,
   rodrigues_rotate,
 )
+from tests.conftest import grad_of
 
 IDENTITY_QUAT = torch.tensor([1.0, 0.0, 0.0, 0.0])
 
@@ -79,8 +80,8 @@ class TestRodriguesRotate:
     omega = torch.zeros(3, requires_grad=True)
     result = rodrigues_rotate(v, omega)
     result.sum().backward()
-    assert not omega.grad.isnan().any()
-    assert not omega.grad.isinf().any()
+    assert not grad_of(omega).isnan().any()
+    assert not grad_of(omega).isinf().any()
 
 
 # ---------------------------------------------------------------------------
@@ -106,8 +107,8 @@ class TestQuatIntegrate:
     w = torch.zeros(3, requires_grad=True)
     q_next = quat_integrate(q, w, dt=0.01)
     q_next.sum().backward()
-    assert not w.grad.isnan().any()
-    assert not w.grad.isinf().any()
+    assert not grad_of(w).isnan().any()
+    assert not grad_of(w).isinf().any()
 
   def test_small_rotation_matches_first_order(self):
     """For small dt, quat_integrate should approximate first-order update."""

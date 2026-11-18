@@ -7,13 +7,16 @@ predictions as ghost entities on top of the ground-truth simulation.
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 
 import mujoco
 import numpy as np
 import torch
+from mjlab.rl import RslRlVecEnvWrapper
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
 
-from supermimic.models import Dynamics
+from supermimic.models import Dynamics, MultiEncoderAE
+from supermimic.motion_api import motion_command
 from supermimic.representations import (
   MaxCoordRepresentation,
   StateRepresentation,
@@ -36,6 +39,17 @@ def create_wm_vis_model(base_model: mujoco.MjModel) -> mujoco.MjModel:
 
 
 class SuperMimicViewerMixin:
+  """SuperMimic's world-model overlay, mixed into an mjlab viewer."""
+
+  # Provided by the mjlab viewer this is mixed into (Native or Viser): the env
+  # and the actor it was built with, its pause state, and Viser's frame counter
+  # (read only with ``update_every_n_frames``, which only the Viser viewer sets).
+  env: RslRlVecEnvWrapper
+  policy: MultiEncoderAE
+  _is_paused: bool
+  _counter: int
+  pause: Callable[[], None]
+
   def setup_supermimic(
     self,
     dynamics: Dynamics,
@@ -59,7 +73,7 @@ class SuperMimicViewerMixin:
       for name, ts in self.task_specs.items()
       if ts.raw_goal_dim > 0
     }
-    motion = self.env.unwrapped.command_manager.get_term("motion").motion
+    motion = motion_command(self.env.unwrapped).motion
     self._replay_goal_tables: dict[str, torch.Tensor] = {
       name: ts.precompute_replay_goal(motion).to(device)
       for name, ts in self.task_specs.items()
@@ -75,7 +89,7 @@ class SuperMimicViewerMixin:
     self.joint_q_adr = np.array(
       [mj_model.joint(n).qposadr[0] for n in joint_names if mj_model.joint(n).type != 0]
     )
-    self._motion_cmd = self.env.unwrapped.command_manager.get_term("motion")
+    self._motion_cmd = motion_command(self.env.unwrapped)
     # Find free joint
     free_joint_id = next(
       (i for i in range(mj_model.njnt) if mj_model.joint(i).type == 0), -1
@@ -92,7 +106,7 @@ class SuperMimicViewerMixin:
 
     # For per-body tracking: map entity-local body indexes to MuJoCo body IDs
     if isinstance(self.representation, MaxCoordRepresentation):
-      motion_cmd = self.env.unwrapped.command_manager.get_term("motion")
+      motion_cmd = motion_command(self.env.unwrapped)
       entity_body_indexes = motion_cmd.body_indexes
       mj_body_ids = motion_cmd.robot.indexing.body_ids[entity_body_indexes]
       self.mj_body_ids = mj_body_ids.cpu().numpy()
@@ -142,7 +156,7 @@ class SuperMimicViewerMixin:
       return extract_actor_goal(curr_goals)
     ts = self.task_specs[self.current_task]
     if self._replay_mode.get(self.current_task, False):
-      motion_cmd = self.env.unwrapped.command_manager.get_term("motion")
+      motion_cmd = motion_command(self.env.unwrapped)
       t = (
         motion_cmd.time_steps[0]
         .long()
@@ -152,6 +166,8 @@ class SuperMimicViewerMixin:
       raw = raw.expand(aux_state.shape[0], -1)
     else:
       raw = self._raw_goal_state[self.current_task].expand(aux_state.shape[0], -1)
+    # Every task but motion (handled above) builds its goal from a command.
+    assert ts.build_inference_goal_obs is not None, ts.name
     return ts.build_inference_goal_obs(raw)
 
   def setup_wm_visualizer(
@@ -200,7 +216,8 @@ class SuperMimicViewerMixin:
             label="wm_prediction",
           )
 
-    base_env.update_visualizers = combined_vis_callback
+    # Wrap the env's visualizer hook (a method) with the world-model overlay.
+    setattr(base_env, "update_visualizers", combined_vis_callback)  # noqa: B010
 
   def reset_wm_visualizer(self) -> None:
     self.reset_env_supermimic()
@@ -227,7 +244,7 @@ class SuperMimicViewerMixin:
         curr_gt_states, curr_goals = obs["full_state"], obs["goal"]
 
         # Pre-step motion frame for the WM goal; env.step advances time_steps below.
-        motion_cmd = self.env.unwrapped.command_manager.get_term("motion")
+        motion_cmd = motion_command(self.env.unwrapped)
         wm_motion_times = motion_cmd.time_steps.clone()
 
         # Initialize wm state at start of rollout (or if reset)
@@ -271,7 +288,8 @@ class SuperMimicViewerMixin:
           self.curr_wm_aux,
         )
 
-        # Closed-loop actor step on the WM-predicted state.
+        # Closed-loop actor step on the WM-predicted state (set at rollout start).
+        assert self.curr_pred_rep_state is not None
         wm_actor_goal = self._build_actor_goal(wm_goal, self.curr_wm_aux)
         wm_sensor = self.representation.compute_actor_sensor(
           self.curr_pred_rep_state,
@@ -483,13 +501,13 @@ class SuperMimicViserViewer(SuperMimicViewerMixin, ViserPlayViewer):
 
   def _apply_selected_clip(self) -> None:
     """Override robot state to a random frame within the selected clip."""
-    motion_cmd = self.env.unwrapped.command_manager.get_term("motion")
+    motion_cmd = motion_command(self.env.unwrapped)
     motion = motion_cmd.motion
 
     idx = self._selected_clip_idx
-    clip_start = 0 if idx == 0 else motion.motion_ends[idx - 1].item()
-    clip_end = motion.motion_ends[idx].item()
-    frame = torch.randint(clip_start, clip_end, (1,)).item()
+    clip_start = 0 if idx == 0 else int(motion.motion_ends[idx - 1])
+    clip_end = int(motion.motion_ends[idx])
+    frame = int(torch.randint(clip_start, clip_end, (1,)))
     motion_cmd.reset_to_frame(torch.tensor([0], device=self.env.device), frame)
 
     base_env = self.env.unwrapped

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import MagicMock
 
 import torch
@@ -10,6 +12,9 @@ from tensordict import TensorDict
 
 from supermimic.sim_context import FootFrictionSpec, SimContext
 from supermimic.tasks.task_spec import TaskSpec
+
+if TYPE_CHECKING:
+  from mjlab.envs import ManagerBasedRlEnv
 
 __all__ = [
   "identity_aux",
@@ -229,3 +234,15 @@ def identity_aux(batch_size: int) -> torch.Tensor:
   aux = torch.zeros(batch_size, 7)
   aux[..., 3] = 1.0
   return aux
+
+
+def grad_of(tensor: torch.Tensor) -> torch.Tensor:
+  """``tensor.grad``, asserting backward reached it."""
+  assert tensor.grad is not None, "no gradient reached the tensor"
+  return tensor.grad
+
+
+def fake_env(**fields: Any) -> ManagerBasedRlEnv:
+  """A stand-in env holding only ``fields``, typed as the env the code under
+  test reads them from."""
+  return cast("ManagerBasedRlEnv", SimpleNamespace(**fields))

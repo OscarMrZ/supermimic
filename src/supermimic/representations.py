@@ -22,11 +22,12 @@ from mjlab.utils.lab_api.math import (
 
 if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv
-  from mjlab.tasks.tracking.mdp.commands import MotionLoader
   from mjlab.utils.forward_kinematics import ForwardKinematics
 
+  from supermimic.motion_api import MotionLibrary
   from supermimic.sim_context import SimContext
 
+from supermimic.motion_api import motion_command
 from supermimic.utils.analytic_ik import AnalyticIK
 from supermimic.utils.gencoord_helpers import (
   compute_gencoord_state,
@@ -191,7 +192,7 @@ def _assemble_goal(
 
 
 def goal_window_indices(
-  motion: MotionLoader,
+  motion: MotionLibrary,
   motion_times: torch.Tensor,
   num_frames: int | None = None,
   stride: int | None = None,
@@ -214,7 +215,7 @@ def goal_window_indices(
 
 
 def motion_goal_window(
-  motion: MotionLoader, motion_times: torch.Tensor
+  motion: MotionLibrary, motion_times: torch.Tensor
 ) -> torch.Tensor:
   """Windowed joint targets as the goal content, ``(E, N * 2J)`` — per frame
   ``[joint_pos(J), joint_vel(J)]``.
@@ -225,7 +226,7 @@ def motion_goal_window(
 
 
 def motion_anchor_window(
-  motion: MotionLoader, motion_times: torch.Tensor
+  motion: MotionLibrary, motion_times: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
   """Motion anchor (the root) world pose ``(pos (E, N, 3), quat (E, N, 4))`` at
   the same windowed indices as :func:`motion_goal_window`.
@@ -288,6 +289,9 @@ class StateRepresentation(nn.Module, ABC):
   }
 
   substep_coeff: float = 1.0
+  _proprio_noise_bounds: torch.Tensor
+  _soft_joint_pos_limits: torch.Tensor
+  _default_joint_pos: torch.Tensor
   dt: float
   """Env step in seconds; set by ``create_representation``."""
 
@@ -327,7 +331,7 @@ class StateRepresentation(nn.Module, ABC):
 
   def bind(self, env: ManagerBasedRlEnv, sim_context: SimContext) -> None:
     """Resolve env-dependent state needed by the reward and the proprio sensor."""
-    joint_ids = env.command_manager.get_term("motion").joint_ids
+    joint_ids = motion_command(env).joint_ids
     limits = env.scene["robot"].data.soft_joint_pos_limits
     self._soft_joint_pos_limits = limits[0, joint_ids]
 
@@ -428,7 +432,7 @@ class StateRepresentation(nn.Module, ABC):
 
   def compute_wm_goal(
     self,
-    motion: MotionLoader,
+    motion: MotionLibrary,
     motion_times: torch.Tensor,
     aux_state: torch.Tensor,
   ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -540,7 +544,7 @@ class GenCoordRepresentation(StateRepresentation):
 
   def bind(self, env: ManagerBasedRlEnv, sim_context: SimContext) -> None:
     super().bind(env, sim_context)
-    self.fk = env.command_manager.get_term("motion").motion.fk
+    self.fk = motion_command(env).motion.fk
 
   def represent(self, full_state: torch.Tensor) -> torch.Tensor:
     flat = full_state.reshape(-1, self.full_state_dim)
@@ -675,6 +679,8 @@ class MaxCoordRepresentation(StateRepresentation):
     "body_avel": "nominal_error_body_avel",
   }
 
+  _gravity_w: torch.Tensor
+
   def __init__(self, num_bodies: int, default_joint_pos: torch.Tensor):
     super().__init__()
     self.num_bodies = num_bodies
@@ -690,7 +696,7 @@ class MaxCoordRepresentation(StateRepresentation):
   def bind(self, env: ManagerBasedRlEnv, sim_context: SimContext) -> None:
     super().bind(env, sim_context)
     robot = env.scene["robot"]
-    motion = env.command_manager.get_term("motion")
+    motion = motion_command(env)
     self.analytic_ik = AnalyticIK(
       env.sim.mj_model,
       robot.indexing.body_ids,
