@@ -30,7 +30,12 @@ def load_runner_cfg(run_config: dict[str, Any]) -> SuperMimicRunnerCfg:
 def check_representation_matches(task_id: str, representation_name: str) -> None:
   """The task fixes the env's obs layout; a run trained with the other
   representation would rebuild — and fail to load — at the wrong shapes."""
-  expected = "maxcoord" if "MaxCoord" in task_id else "gencoord"
+  if "MaxCoord" in task_id:
+    expected = "maxcoord"
+  elif task_id.endswith("-WBC"):
+    expected = "wbc"
+  else:
+    expected = "gencoord"
   if representation_name != expected:
     raise ValueError(
       f"{task_id} is a {expected} task but the run was trained with "

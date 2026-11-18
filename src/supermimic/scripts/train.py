@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from dataclasses import dataclass
 
@@ -9,6 +10,7 @@ import mjlab.tasks  # noqa: F401
 import tyro
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.tasks.registry import list_tasks, load_env_cfg
+from pal_mjlab.tasks.WBC.mdp.commands import OnlineMotionCommandCfg
 
 import supermimic.tasks  # noqa: F401
 from supermimic.representations import set_goal_window
@@ -18,6 +20,8 @@ from supermimic.scripts.train_utils import (
   download_registry_motions,
   setup_device,
 )
+from supermimic.tasks.wbc import RUNNER_DEFAULTS, wbc_goal_noise
+from supermimic.tasks.wbc import TASK_ID as WBC_TASK_ID
 
 
 @dataclass
@@ -34,6 +38,14 @@ class TrainConfig:
   @staticmethod
   def from_task(task_id: str) -> "TrainConfig":
     env_cfg = load_env_cfg(task_id, play=False)
+    if task_id == WBC_TASK_ID:
+      # pal_mjlab's WBC: its actor, its sampling, its goal noise; its motions
+      # come from --motion-file (a CSV folder), not from a registry.
+      runner = dataclasses.replace(SuperMimicRunnerCfg(), **RUNNER_DEFAULTS)
+      tasks = runner.tasks
+      upper_body = dataclasses.replace(tasks.upper_body, **wbc_goal_noise())
+      runner.tasks = dataclasses.replace(tasks, upper_body=upper_body)
+      return TrainConfig(env=env_cfg, runner=runner, registry_name=None)
     return TrainConfig(
       env=env_cfg,
       runner=SuperMimicRunnerCfg(),
@@ -59,7 +71,12 @@ def main() -> None:
   device = setup_device(args.device)
   print(f"[INFO] Loading environment: {chosen_task}")
 
-  if args.motion_file:
+  motion_cmd = args.env.commands["motion"]
+  if args.motion_file and isinstance(motion_cmd, OnlineMotionCommandCfg):
+    # pal_mjlab's CSV command: one folder of clips.
+    motion_cmd.motion_dir = os.path.expanduser(args.motion_file)
+    print(f"[INFO] Using local motion folder: {args.motion_file}")
+  elif args.motion_file:
     # Local motions handed straight to MotionLoader (globs/concatenates).
     if "," in args.motion_file:
       args.env.commands["motion"].motion_file = [

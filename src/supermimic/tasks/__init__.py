@@ -57,3 +57,18 @@ try:
 except ValueError:
   # Already registered
   pass
+
+try:
+  # pal_mjlab's Mjlab-WBC-Flat-Pal-Kangaroo-Grippers, trained with SuperMimic.
+  from .wbc import TASK_ID as WBC_TASK_ID
+  from .wbc import wbc_env_cfg
+
+  register_mjlab_task(
+    task_id=WBC_TASK_ID,
+    env_cfg=wbc_env_cfg(),
+    play_env_cfg=wbc_env_cfg(play=True),
+    rl_cfg=load_rl_cfg("Mjlab-WBC-Flat-Pal-Kangaroo-Grippers"),
+  )
+except ValueError:
+  # Already registered
+  pass

@@ -704,6 +704,8 @@ class SuperMimicRunner(BaseRunner[SuperMimicRunnerCfg]):
         if weights is not None:
           self.motion_cmd.set_sampling_distribution(weights)
 
+    # Curriculum-driven reward weights reach the imagined reward.
+    self._representation.sync_env(self.env.unwrapped)
     self._flush_normalization()
     return self.env.num_envs
 

@@ -146,7 +146,27 @@ def _sensor_actor_group() -> ObservationGroupCfg:
   )
 
 
-def _goal_obs_group() -> ObservationGroupCfg:
+def full_state_group() -> ObservationGroupCfg:
+  """The world model's generalized-coordinate state, every joint of the robot.
+
+  Layout ``[root_pos(3), root_quat(4), joint_pos(N), root_lin_vel(3),
+  root_ang_vel(3), joint_vel(N)]``, root in the env's origin-free world frame.
+  """
+  return ObservationGroupCfg(
+    terms={
+      "root_pos": ObservationTermCfg(func=root_pos),
+      "root_ori": ObservationTermCfg(func=root_ori),
+      "joint_pos": ObservationTermCfg(func=joint_pos),
+      "root_lin_vel": ObservationTermCfg(func=root_lin_vel),
+      "root_ang_vel": ObservationTermCfg(func=root_ang_vel),
+      "joint_vel": ObservationTermCfg(func=joint_vel),
+    },
+    concatenate_terms=True,
+    enable_corruption=False,
+  )
+
+
+def goal_obs_group() -> ObservationGroupCfg:
   """Goal group, layout ``[command, rel_pos, rel_ori]`` matching wm_goal.
 
   ``motion_anchor_pos_b`` (rel_pos) is world-model only; the deployed actor drops
@@ -203,22 +223,8 @@ def _gencoord_env_cfg(
 
   cfg.observations["actor"] = _sensor_actor_group()
 
-  # Add full state observation group
-  cfg.observations["full_state"] = ObservationGroupCfg(
-    terms={
-      "root_pos": ObservationTermCfg(func=root_pos),
-      "root_ori": ObservationTermCfg(func=root_ori),
-      "joint_pos": ObservationTermCfg(func=joint_pos),
-      "root_lin_vel": ObservationTermCfg(func=root_lin_vel),
-      "root_ang_vel": ObservationTermCfg(func=root_ang_vel),
-      "joint_vel": ObservationTermCfg(func=joint_vel),
-    },
-    concatenate_terms=True,
-    enable_corruption=False,
-  )
-
-  # Add goal observation group
-  cfg.observations["goal"] = _goal_obs_group()
+  cfg.observations["full_state"] = full_state_group()
+  cfg.observations["goal"] = goal_obs_group()
 
   cfg.events = {
     name: term
@@ -269,6 +275,6 @@ def maxcoord_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     enable_corruption=False,
   )
 
-  cfg.observations["goal"] = _goal_obs_group()
+  cfg.observations["goal"] = goal_obs_group()
 
   return cfg

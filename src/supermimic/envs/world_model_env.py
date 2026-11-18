@@ -183,7 +183,9 @@ class WorldModelEnv(ABC):
     ref_body_pos_w, ref_body_quat_w, ref_body_lin_vel_w, ref_body_ang_vel_w = (
       self._ref_body_state
     )
-    term_prob = self._compute_term_prob(next_aux_state, ref_body_pos_w, ref_body_quat_w)
+    term_prob = self._compute_term_prob(
+      next_aux_state, ref_body_pos_w, ref_body_quat_w, rep_state=next_rep_state
+    )
     reward = self.representation.compute_wm_reward_from_reference(
       next_rep_state,
       next_aux_state,
@@ -194,6 +196,8 @@ class WorldModelEnv(ABC):
       ref_body_quat_w,
       ref_body_lin_vel_w,
       ref_body_ang_vel_w,
+      ref_joint_state=self._ref_joint_state,
+      term_prob=term_prob,
     )
     return next_aux_state, next_rep_state, next_joint_state, term_prob, reward
 
@@ -202,6 +206,7 @@ class WorldModelEnv(ABC):
     aux_state: torch.Tensor,
     ref_body_pos_w: torch.Tensor,
     ref_body_quat_w: torch.Tensor,
+    rep_state: torch.Tensor | None = None,
   ) -> torch.Tensor:
     """Soft termination from the real threshold rules."""
     anchor_pos_w = ref_body_pos_w[:, self._anchor_index]
@@ -216,6 +221,14 @@ class WorldModelEnv(ABC):
       height_error / self._anchor_pos_threshold,
       tilt_error / self._anchor_ori_threshold,
     )
+    # The representation's own terminations (e.g. the WBC end bodies), which
+    # need the full predicted state.
+    if rep_state is not None:
+      extra = self.representation.termination_errors(
+        aux_state, rep_state, ref_body_pos_w, ref_body_quat_w
+      )
+      if isinstance(extra, torch.Tensor):
+        normalized_error = torch.maximum(normalized_error, extra)
     return torch.sigmoid((normalized_error - 1.0) / self._termination_softness)
 
   def _on_reset(self, batch: TensorDict) -> None:
@@ -241,6 +254,13 @@ class WorldModelEnv(ABC):
   def _update_goal(self) -> None:
     """Compute the reference body state at ``motion_times`` and rebuild goals."""
     self._ref_body_state = self.motion.body_state(self.motion_times)
+    self._ref_joint_state = torch.cat(
+      [
+        self.motion.joint_pos[self.motion_times],
+        self.motion.joint_vel[self.motion_times],
+      ],
+      dim=-1,
+    )
     self._wm_goal_obs, self._actor_goal_obs = self.representation.compute_wm_goal(
       self.motion, self.motion_times, self.aux_state
     )

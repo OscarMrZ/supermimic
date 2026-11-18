@@ -39,7 +39,6 @@ class MultiTaskWorldModelEnv(WorldModelEnv):
     device: str = "cpu",
   ) -> None:
     self.task_specs = task_specs
-    assert task_specs[0].name == "motion", "task_specs[0] must be the motion task"
     super().__init__(
       dynamics=dynamics,
       representation=representation,
@@ -52,13 +51,15 @@ class MultiTaskWorldModelEnv(WorldModelEnv):
     )
 
   def _build_task_goals(self) -> None:
-    # The anchor task's goal is the actor goal already built in _update_goal; reuse it.
-    anchor, *rest = self.task_specs
-    self._task_goal_obs: dict[str, torch.Tensor] = {anchor.name: self._actor_goal_obs}
-    for ts in rest:
-      self._task_goal_obs[ts.name] = ts.extract_training_goal(
-        self.motion, self.motion_times, self.aux_state
-      ).clone()
+    # The motion task's goal is the actor goal already built in _update_goal.
+    self._task_goal_obs: dict[str, torch.Tensor] = {}
+    for ts in self.task_specs:
+      if ts.name == "motion":
+        self._task_goal_obs[ts.name] = self._actor_goal_obs
+      else:
+        self._task_goal_obs[ts.name] = ts.extract_training_goal(
+          self.motion, self.motion_times, self.aux_state
+        ).clone()
 
   def get_observations(self) -> TensorDict:
     return build_actor_obs_td(

@@ -270,13 +270,30 @@ def make_upper_body_task(cfg: "UpperBodyTaskCfg", env: "ManagerBasedRlEnv") -> T
     times = torch.arange(motion.time_step_total, device=motion.joint_pos.device)
     return command(motion, times)
 
-  goal_dim = cfg.goal_frames * (11 + 2 * len(upper))
+  # Per-dim uniform half-widths of one frame, in the command's layout.
+  num_upper = len(upper)
+  frame_noise = torch.cat(
+    [
+      torch.tensor([cfg.height_noise], device=device),
+      torch.tensor(cfg.lin_vel_noise, device=device),
+      torch.tensor(cfg.ang_vel_noise, device=device),
+      torch.full((3,), cfg.gravity_noise, device=device),
+      torch.full((num_upper,), cfg.joint_pos_noise, device=device),
+      torch.full((num_upper,), cfg.joint_vel_noise, device=device),
+      torch.tensor([cfg.com_feet_noise], device=device),
+    ]
+  )
+  noise_half = frame_noise.repeat(cfg.goal_frames)
+
+  def extract(motion, motion_times, aux_state):
+    goal = command(motion, motion_times)
+    return goal + (torch.rand_like(goal) * 2 - 1) * noise_half
+
+  goal_dim = cfg.goal_frames * (11 + 2 * num_upper)
   return TaskSpec(
     name="upper_body",
     goal_dim=goal_dim,
-    extract_training_goal=lambda motion, motion_times, aux_state: command(
-      motion, motion_times
-    ),
+    extract_training_goal=extract,
     build_inference_goal_obs=lambda raw: raw,
     raw_goal_dim=goal_dim,
     precompute_replay_goal=precompute_replay_goal,
@@ -310,6 +327,15 @@ class UpperBodyTaskCfg:
   """Bodies whose midpoint the reference's centre of mass is measured from."""
   leg_joint_token: str = "leg"
   """Joints with this in their name are left out of the command."""
+  # Training-time uniform noise half-widths per command term (none by default);
+  # the WBC task sets pal_mjlab's actor-observation noise.
+  height_noise: float = 0.0
+  lin_vel_noise: tuple[float, float, float] = (0.0, 0.0, 0.0)
+  ang_vel_noise: tuple[float, float, float] = (0.0, 0.0, 0.0)
+  gravity_noise: float = 0.0
+  joint_pos_noise: float = 0.0
+  joint_vel_noise: float = 0.0
+  com_feet_noise: float = 0.0
 
 
 @dataclass(frozen=True)

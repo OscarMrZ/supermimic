@@ -12,12 +12,19 @@ license-files = ["LICENSE"]
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "mjlab",
+    "pal-mjlab",
     "ruff>=0.14.10",
     "viser>=1.0.24",
 ]
 
+[tool.uv]
+# moviepy 2.x (via pal-mjlab) caps pillow <12 while mjviser (via mjlab) needs >=12.2.
+# Same override pal_mjlab uses; uv only honours overrides from the root project.
+override-dependencies = ["pillow>=12.2.0"]
+
 [tool.uv.sources]
 mjlab = { path = "../mjlab_research", editable = true }
+pal-mjlab = { git = "ssh://git@github.com/pal-robotics/pal_mjlab.git", rev = "246004e6" }
 
 [tool.ruff]
 src = ["src"]

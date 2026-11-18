@@ -313,7 +313,7 @@ def diagnose(task_id: str, cfg: DiagnoseConfig) -> None:
       value_at(t, e).mean(),
       (ref_pos[:, anchor, 2] - aux[:, 2]).abs().mean(),
       (gravity_z[0] - gravity_z[1]).abs().mean(),
-      wm_env._compute_term_prob(aux, ref_pos, ref_quat).mean(),
+      wm_env._compute_term_prob(aux, ref_pos, ref_quat, rep_state=rep_all[t, e]).mean(),
     )
   row("any recorded state", value_at(*sample(~R["ended"])).mean())
 

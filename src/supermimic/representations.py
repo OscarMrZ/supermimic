@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 import torch
 import torch.nn as nn
@@ -72,11 +72,17 @@ def create_representation(
         f"Maxcoord full_state_dim ({full_state_dim}) must be divisible by 13"
       )
     rep = MaxCoordRepresentation(full_state_dim // 13, default_joint_pos)
+  elif name == "wbc":
+    from supermimic.tasks.wbc import WbcRepresentation
+
+    rep = WbcRepresentation(
+      infer_num_joints_from_state_dim(full_state_dim), default_joint_pos
+    )
   else:
     raise ValueError(
-      f"Unknown representation: {name}. Must be 'gencoord' or 'maxcoord'."
+      f"Unknown representation: {name}. Must be 'gencoord', 'maxcoord' or 'wbc'."
     )
-  rep.actor_obs_mode = actor_obs_mode
+  rep.actor_obs_mode = cast(Literal["rep_state", "proprio"], actor_obs_mode)
   if actor_obs_mode == "proprio":
     rep.register_buffer(
       "_proprio_noise_bounds",
@@ -282,6 +288,8 @@ class StateRepresentation(nn.Module, ABC):
   }
 
   substep_coeff: float = 1.0
+  dt: float
+  """Env step in seconds; set by ``create_representation``."""
 
   # ------------------------------------------------------------------
   # Abstract methods (must be implemented by subclasses)
@@ -454,8 +462,13 @@ class StateRepresentation(nn.Module, ABC):
     target_body_quat_w: torch.Tensor,
     target_body_lin_vel_w: torch.Tensor,
     target_body_ang_vel_w: torch.Tensor,
+    ref_joint_state: torch.Tensor | None = None,
+    term_prob: torch.Tensor | None = None,
   ) -> torch.Tensor:
     """Per-env scalar reward used for WM-env rollouts.
+
+    ``ref_joint_state`` (the reference ``[joint_pos, joint_vel]``) and
+    ``term_prob`` are there for rewards that read them; this one does not.
 
     ``action``/``last_action`` are raw policy outputs (pre-scale/offset), as the
     replay buffer stores them; :class:`supermimic.models.Dynamics` is the sole
@@ -474,6 +487,21 @@ class StateRepresentation(nn.Module, ABC):
       self._soft_joint_pos_limits,
       self.dt,
     )
+
+  def termination_errors(
+    self,
+    aux_state: torch.Tensor,
+    rep_state: torch.Tensor,
+    target_body_pos_w: torch.Tensor,
+    target_body_quat_w: torch.Tensor,
+  ) -> torch.Tensor | None:
+    """Extra termination errors, each normalized by its threshold (``> 1``
+    terminates), beyond the anchor height and tilt. Default: none."""
+    del aux_state, rep_state, target_body_pos_w, target_body_quat_w
+    return None
+
+  def sync_env(self, env: ManagerBasedRlEnv) -> None:  # noqa: B027
+    """Pick up env-side changes (e.g. curriculum weights). Default: none."""
 
   @abstractmethod
   def loss_blocks(
