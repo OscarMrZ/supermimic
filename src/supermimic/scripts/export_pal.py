@@ -16,9 +16,9 @@ being the goal of the encoder.
   goal term by term (all the joint frames, then all the orientations) and its rot6d row after row,
   so the exported graph starts by permuting its input into the actor's layout.
 - ``velocity_command``, ``[vx, vy, wz]`` in the base frame, as the actor reads it.
-- ``upper_body_goal``, frame by frame ``[base height, base lin vel, base ang vel, gravity,
-  joint_pos, joint_vel, CoM to feet distance]`` over the joints that are not of the legs, as the
-  actor reads it (see make_upper_body_task()).
+- ``upper_body_goal``, frame by frame ``[base height, base lin vel x y, base yaw rate, gravity,
+  joint_pos, joint_vel]`` over the joints that are not of the legs, as the actor reads it (see
+  make_upper_body_task()).
 
 Without a reference, the controller holds a still goal. The actor only ever saw goals from the
 motions, so that goal must be a stand that they hold: ``goal_hold_joint_pos`` (and the
@@ -221,7 +221,7 @@ def goal_metadata(env: ManagerBasedRlEnv, cfg: ExportConfig) -> dict[str, str]:
     task = cfg.runner.tasks.upper_body
     joints = [name for name in joints if task.leg_joint_token not in name]
     frames, stride = task.goal_frames, task.goal_stride
-    frame_size = 11 + 2 * len(joints)
+    frame_size = 7 + 2 * len(joints)
     hold_height = {"goal_hold_base_height": csv([motion.motion.root_pos_w[hold, 2]])}
   columns = [motion.motion.fk.joint_names.index(name) for name in joints]
   return {
