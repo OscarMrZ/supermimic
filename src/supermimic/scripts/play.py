@@ -32,6 +32,8 @@ from supermimic.scripts.viewers import (
   SuperMimicViserViewer,
   create_wm_vis_model,
 )
+from supermimic.tasks.wbc import TASK_ID as WBC_TASK_ID
+from supermimic.tasks.wbc import wbc_runner_cfg
 from supermimic.utils.wandb_artifacts import (
   download_artifact_cached,
   download_model_dir,
@@ -170,7 +172,13 @@ def main() -> None:
     return_unknown_args=True,
     config=mjlab.TYRO_FLAGS,
   )
-  args = tyro.cli(PlayConfig, args=remaining_args, config=mjlab.TYRO_FLAGS)
+  default = PlayConfig()
+  if chosen_task == WBC_TASK_ID:
+    # pal_mjlab's WBC run: its runner settings, opening on its upper-body encoder.
+    default = PlayConfig(runner=wbc_runner_cfg(), initial_task="upper_body")
+  args = tyro.cli(
+    PlayConfig, args=remaining_args, default=default, config=mjlab.TYRO_FLAGS
+  )
   play(chosen_task, args)
 
 

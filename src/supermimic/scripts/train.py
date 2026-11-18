@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import os
 from dataclasses import dataclass
 
@@ -21,8 +20,8 @@ from supermimic.scripts.train_utils import (
   download_registry_motions,
   setup_device,
 )
-from supermimic.tasks.wbc import RUNNER_DEFAULTS, wbc_goal_noise
 from supermimic.tasks.wbc import TASK_ID as WBC_TASK_ID
+from supermimic.tasks.wbc import wbc_runner_cfg
 
 
 @dataclass
@@ -42,11 +41,7 @@ class TrainConfig:
     if task_id == WBC_TASK_ID:
       # pal_mjlab's WBC: its actor, its sampling, its goal noise; its motions
       # come from --motion-file (a CSV folder), not from a registry.
-      runner = dataclasses.replace(SuperMimicRunnerCfg(), **RUNNER_DEFAULTS)
-      tasks = runner.tasks
-      upper_body = dataclasses.replace(tasks.upper_body, **wbc_goal_noise())
-      runner.tasks = dataclasses.replace(tasks, upper_body=upper_body)
-      return TrainConfig(env=env_cfg, runner=runner, registry_name=None)
+      return TrainConfig(env=env_cfg, runner=wbc_runner_cfg(), registry_name=None)
     return TrainConfig(
       env=env_cfg,
       runner=SuperMimicRunnerCfg(),

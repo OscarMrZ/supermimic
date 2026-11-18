@@ -20,6 +20,7 @@ method needs:
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING, Any, cast
 
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
   from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
   from mjlab.utils.noise import UniformNoiseCfg
 
+  from supermimic.runners.supermimic_runner import SuperMimicRunnerCfg
   from supermimic.sim_context import SimContext
 
 TASK_ID = "SuperMimic-GenCoord-Kangaroo-Grippers-WBC"
@@ -233,6 +235,17 @@ def wbc_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     func=motion_end, time_out=True, params={"command_name": "motion"}
   )
   return cfg
+
+
+def wbc_runner_cfg() -> SuperMimicRunnerCfg:
+  """SuperMimic's runner cfg for this task: ``RUNNER_DEFAULTS`` and the WBC goal
+  noise. Training and play start from it."""
+  from supermimic.runners.supermimic_runner import SuperMimicRunnerCfg
+
+  runner = dataclasses.replace(SuperMimicRunnerCfg(), **RUNNER_DEFAULTS)
+  upper_body = dataclasses.replace(runner.tasks.upper_body, **wbc_goal_noise())
+  runner.tasks = dataclasses.replace(runner.tasks, upper_body=upper_body)
+  return runner
 
 
 def wbc_goal_noise() -> dict[str, Any]:
