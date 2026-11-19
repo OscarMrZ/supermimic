@@ -129,7 +129,7 @@ PROPRIO_NOISE_HALF_WIDTHS: dict[str, float] = {
   "projected_gravity": 0.05,
   "base_ang_vel": 0.2,
   "joint_pos": 0.01,
-  "joint_vel": 0.5,
+  "joint_vel": 0.05,
   "actions": 0.0,
 }
 

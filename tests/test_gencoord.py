@@ -234,7 +234,7 @@ class TestGenCoordNoiseBounds:
     assert torch.allclose(bounds[3:6], torch.full((3,), 0.2))
     assert torch.allclose(bounds[6 : 6 + NUM_JOINTS], torch.full((NUM_JOINTS,), 0.01))
     assert torch.allclose(
-      bounds[6 + NUM_JOINTS : 6 + 2 * NUM_JOINTS], torch.full((NUM_JOINTS,), 0.5)
+      bounds[6 + NUM_JOINTS : 6 + 2 * NUM_JOINTS], torch.full((NUM_JOINTS,), 0.05)
     )
 
 
