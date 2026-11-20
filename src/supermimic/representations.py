@@ -8,6 +8,7 @@ Two representations are provided:
 from __future__ import annotations
 
 import math
+import os
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Literal
 
@@ -125,11 +126,12 @@ def actor_goal_dim(num_goals: int) -> int:
   return num_goals - GOAL_REL_POS_DIM
 
 
+# SUPERMIMIC_JOINT_VEL_NOISE sets another joint velocity noise, to try one out.
 PROPRIO_NOISE_HALF_WIDTHS: dict[str, float] = {
   "projected_gravity": 0.05,
   "base_ang_vel": 0.2,
   "joint_pos": 0.01,
-  "joint_vel": 0.05,
+  "joint_vel": float(os.environ.get("SUPERMIMIC_JOINT_VEL_NOISE", 0.05)),
   "actions": 0.0,
 }
 
