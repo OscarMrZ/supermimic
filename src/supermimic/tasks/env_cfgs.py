@@ -7,12 +7,16 @@ from typing import cast
 
 import mjlab.envs.mdp as mdp
 import torch
+from mjlab.asset_zoo.robots import KANGAROO_FULL_ACTION_SCALE
 from mjlab.envs import ManagerBasedRlEnv, ManagerBasedRlEnvCfg
 from mjlab.managers import ObservationGroupCfg, ObservationTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.tasks.tracking.config.g1.env_cfgs import unitree_g1_flat_tracking_env_cfg
 from mjlab.tasks.tracking.config.kangaroo.env_cfgs import (
   pal_kangaroo_flat_tracking_env_cfg,
+)
+from mjlab.tasks.tracking.config.kangaroo_full.env_cfgs import (
+  pal_kangaroo_full_flat_tracking_env_cfg,
 )
 from mjlab.tasks.tracking.mdp.commands import MotionCommand
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
@@ -70,6 +74,14 @@ body_pos_w = _make_body_obs_fn("robot_body_pos_w", subtract_origins=True)
 body_quat_w = _make_body_obs_fn("robot_body_quat_w")
 body_lin_vel_w = _make_body_obs_fn("robot_body_lin_vel_w")
 body_ang_vel_w = _make_body_obs_fn("robot_body_ang_vel_w")
+
+
+def robot_joint_pos_rel(
+  env: ManagerBasedRlEnv, command_name: str = "motion"
+) -> torch.Tensor:
+  """The motion's joints on the robot, relative to their default positions."""
+  command = cast(MotionCommand, env.command_manager.get_term(command_name))
+  return command.robot_joint_pos - command.robot_default_joint_pos
 
 
 def motion_command_window(
@@ -192,6 +204,27 @@ def kangaroo_gencoord_env_cfg(
   # Only the self-collision reward reads this sensor, and that reward is dropped.
   # Kangaroo's collision meshes overflow its contact matches when the arms flail.
   cfg.scene.sensors = ()
+  return cfg
+
+
+def kangaroo_full_gencoord_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Create generalized-coordinate world model environment configuration based on Kangaroo full-model tracking.
+
+  The action is in actuator space, the position targets of the screws, arms and
+  waist. The state, the sensors and the goal are in joint space, the 7-DoF simple
+  model's, as the command gives them through the transmissions of the legs.
+  """
+  cfg = kangaroo_gencoord_env_cfg(
+    play=play, tracking_env_cfg=pal_kangaroo_full_flat_tracking_env_cfg
+  )
+  actor = cfg.observations["actor"].terms
+  actor["joint_pos"].func, actor["joint_pos"].params = robot_joint_pos_rel, {}
+  actor["joint_vel"].func = _make_body_obs_fn("robot_joint_vel")
+  actor["joint_vel"].params = {}
+  # The simulated joints with limits to keep off are the actuated ones.
+  cfg.rewards["joint_limit"].params["asset_cfg"] = SceneEntityCfg(
+    "robot", joint_names=tuple(KANGAROO_FULL_ACTION_SCALE)
+  )
   return cfg
 
 
