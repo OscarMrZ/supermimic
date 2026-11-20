@@ -317,9 +317,8 @@ class SuperMimicViewerMixin:
             self.wm_vis_mocap_pos = root_pos.cpu().numpy()
             self.wm_vis_mocap_quat = root_quat.cpu().numpy()
             joint_state_start = 0
-          joint_state = state[
-            joint_state_start : joint_state_start + len(self._motion_cmd.joint_ids)
-          ]
+          num_joints = self._motion_cmd.motion.joint_pos.shape[1]
+          joint_state = state[joint_state_start : joint_state_start + num_joints]
           joint_pos, _ = self._motion_cmd.full_joint_state(
             joint_state, torch.zeros_like(joint_state)
           )

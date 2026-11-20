@@ -315,9 +315,8 @@ class StateRepresentation(nn.Module, ABC):
 
   def bind(self, env: ManagerBasedRlEnv, sim_context: SimContext) -> None:
     """Resolve env-dependent state needed by the reward and the proprio sensor."""
-    joint_ids = env.command_manager.get_term("motion").joint_ids
-    limits = env.scene["robot"].data.soft_joint_pos_limits
-    self._soft_joint_pos_limits = limits[0, joint_ids]
+    motion = env.command_manager.get_term("motion")
+    self._soft_joint_pos_limits = motion.robot_soft_joint_pos_limits[0]
 
   @abstractmethod
   def joint_state(self, rep_state: torch.Tensor) -> torch.Tensor:
