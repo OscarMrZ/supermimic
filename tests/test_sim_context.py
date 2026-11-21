@@ -26,16 +26,19 @@ def _env(
   return SimpleNamespace(
     cfg=SimpleNamespace(events=events or {}),
     scene=scene or {},
-    command_manager=_command_manager(num_joints),
+    command_manager=_command_manager(num_joints, (scene or {}).get("robot")),
     sim=SimpleNamespace(model=sim_model) if sim_model is not None else None,
     num_envs=num_envs,
     device="cpu",
   )
 
 
-def _command_manager(num_joints: int) -> SimpleNamespace:
-  """A command manager whose motion holds all ``num_joints`` joints."""
+def _command_manager(num_joints: int, robot=None) -> SimpleNamespace:
+  """A command manager whose motion holds all ``num_joints`` joints of ``robot``."""
   motion = SimpleNamespace(joint_ids=torch.arange(num_joints))
+  bias = getattr(getattr(robot, "data", None), "encoder_bias", None)
+  if bias is not None:
+    motion.robot_encoder_bias = bias[:, motion.joint_ids]
   return SimpleNamespace(get_term=lambda _: motion)
 
 
@@ -314,7 +317,7 @@ def _full_env(*event_names: str, num_envs: int = 2):
   return SimpleNamespace(
     cfg=SimpleNamespace(events=events),
     scene={"robot": asset},
-    command_manager=_command_manager(3),
+    command_manager=_command_manager(3, asset),
     sim=SimpleNamespace(
       model=SimpleNamespace(
         geom_friction=torch.zeros(num_envs, 1, 3),

@@ -135,24 +135,20 @@ class EncoderBiasSpec(SimContextSpec):
   dim = 0  # set in bind() from the motion's joints
 
   def __init__(self) -> None:
-    self._asset_name: str | None = None
-    self._joint_ids: torch.Tensor | None = None
+    self._bound = False
 
   def bind(self, env: ManagerBasedRlEnv) -> list[tuple[float, float]]:
     event_cfg = env.cfg.events.get(self.name)
     if event_cfg is None:
       raise RuntimeError(f"EncoderBiasSpec: no event '{self.name}' on env.cfg.events")
-    params = event_cfg.params
-    asset_cfg = params["asset_cfg"]
-    self._asset_name = asset_cfg.name
-    self._joint_ids = env.command_manager.get_term("motion").joint_ids
-    self.dim = len(self._joint_ids)
-    return [params["bias_range"]] * self.dim
+    self._bound = True
+    self.dim = self.read(env).shape[1]
+    return [event_cfg.params["bias_range"]] * self.dim
 
   def read(self, env: ManagerBasedRlEnv) -> torch.Tensor:
-    if self._asset_name is None:
+    if not self._bound:
       raise RuntimeError("EncoderBiasSpec.read() called before bind()")
-    return env.scene[self._asset_name].data.encoder_bias[:, self._joint_ids]
+    return env.command_manager.get_term("motion").robot_encoder_bias
 
 
 class SimContext(nn.Module):

@@ -79,9 +79,11 @@ body_ang_vel_w = _make_body_obs_fn("robot_body_ang_vel_w")
 def robot_joint_pos_rel(
   env: ManagerBasedRlEnv, command_name: str = "motion"
 ) -> torch.Tensor:
-  """The motion's joints on the robot, relative to their default positions."""
+  """The motion's joints as the robot reads them, relative to their default
+  positions."""
   command = cast(MotionCommand, env.command_manager.get_term(command_name))
-  return command.robot_joint_pos - command.robot_default_joint_pos
+  joint_pos = command.robot_joint_pos + command.robot_encoder_bias
+  return joint_pos - command.robot_default_joint_pos
 
 
 def motion_command_window(
